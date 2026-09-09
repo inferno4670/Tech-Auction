@@ -1,0 +1,298 @@
+import { useEffect, useState, useCallback, useRef } from 'react';
+import {
+  getRankings, getCurrentAuction, getEventSettings, getBidsForAuction
+} from '../../lib/queries';
+import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
+import { Badge } from '../../components/ui';
+import { AnimatedNumber } from '../../components/ui/AnimatedNumber';
+import { formatTime } from '../../lib/utils';
+import type { TeamWithRank, AuctionWithItem, EventSettings, Bid } from '../../types';
+import { Zap, Trophy, Clock } from 'lucide-react';
+
+export default function DisplayPage() {
+  const [rankings, setRankings] = useState<TeamWithRank[]>([]);
+  const [auction, setAuction] = useState<AuctionWithItem | null>(null);
+  const [settings, setSettings] = useState<EventSettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [bids, setBids] = useState<Bid[]>([]);
+
+  const mountedRef = useRef(true);
+  const loadIdRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const loadData = useCallback(async () => {
+    const myLoadId = ++loadIdRef.current;
+    try {
+      const [r, a, s] = await Promise.all([getRankings(), getCurrentAuction(), getEventSettings()]);
+      if (!mountedRef.current || myLoadId !== loadIdRef.current) return;
+      setRankings(r);
+      setAuction(a);
+      setSettings(s);
+      if (a) {
+        try {
+          const b = await getBidsForAuction(a.id);
+          if (mountedRef.current && myLoadId === loadIdRef.current) {
+            setBids(b);
+          }
+        } catch {
+          // bid fetch failed, keep existing bids
+        }
+      } else {
+        setBids([]);
+      }
+    } catch (err) {
+      console.error('DisplayPage loadData error:', err);
+    } finally {
+      if (mountedRef.current && myLoadId === loadIdRef.current) {
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  useAuctionRealtime(() => { if (mountedRef.current) loadData(); });
+  useTeamRealtime(() => { if (mountedRef.current) loadData(); });
+  useEventSettingsRealtime(() => { if (mountedRef.current) loadData(); });
+  useBidRealtime(auction?.id || null, () => {
+    if (!mountedRef.current) return;
+    const aid = auction?.id;
+    if (aid) {
+      getBidsForAuction(aid).then(b => {
+        if (mountedRef.current) setBids(b);
+      }).catch(() => {});
+    }
+    loadData();
+  });
+
+  // Timer countdown
+  const [, setTick] = useState(0);
+  const timerRunning = auction?.status === 'question' && auction.timer_started_at != null && !auction.timer_paused;
+  const timeRemaining = (() => {
+    if (!auction?.timer_started_at || auction.status !== 'question') return 0;
+    if (auction.timer_paused) return auction.timer_duration;
+    const elapsed = Math.floor((Date.now() - new Date(auction.timer_started_at).getTime()) / 1000);
+    return Math.max(0, auction.timer_duration - elapsed);
+  })();
+
+  useEffect(() => {
+    if (!timerRunning) return;
+    const interval = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [timerRunning]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-dark-900 grid-bg flex items-center justify-center">
+        <div className="text-center">
+          <Zap className="mx-auto text-cyan-400 animate-pulse-glow" size={48} />
+          <p className="text-slate-500 font-mono mt-4">LOADING DISPLAY...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const isFinalized = settings?.status === 'finalized';
+
+  return (
+    <div className="min-h-screen bg-dark-900 grid-bg p-8 overflow-hidden">
+      {/* Background effects */}
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1200px] h-[400px] bg-cyan-500/3 rounded-full blur-[150px]" />
+        <div className="absolute bottom-0 right-0 w-[800px] h-[400px] bg-violet-500/3 rounded-full blur-[120px]" />
+      </div>
+
+      <div className="relative z-10 max-w-[1400px] mx-auto">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <div className="flex items-center justify-center gap-3 mb-2">
+            <Zap className="text-cyan-400" size={32} />
+            <h1 className="text-5xl font-black text-slate-900 tracking-tighter">
+              TECH <span className="text-cyan-400 text-glow-cyan">AUCTION</span>
+            </h1>
+            <Zap className="text-cyan-400" size={32} />
+          </div>
+          <div className="w-48 h-0.5 bg-gradient-to-r from-transparent via-cyan-500 to-transparent mx-auto" />
+          <p className="text-sm text-slate-500 font-mono mt-3 tracking-widest">
+            {settings?.event_name || 'NATIONAL LEVEL QUIZ COMPETITION'}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-3 gap-6">
+          {/* Left: Current Auction */}
+          <div className="col-span-2">
+            {auction && auction.status !== 'completed' ? (
+              <div className="card neon-border p-8">
+                {/* Auction Status */}
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-3">
+                    <Badge variant={
+                      auction.status === 'open' ? 'green' :
+                      auction.status === 'question' ? 'violet' :
+                      auction.status === 'closed' ? 'amber' : 'default'
+                    }>
+                      {auction.status === 'open' ? 'BIDDING OPEN' :
+                       auction.status === 'question' ? 'QUESTION TIME' :
+                       auction.status.toUpperCase()}
+                    </Badge>
+                  </div>
+                  {auction.status === 'question' && (
+                    <div className="flex items-center gap-2">
+                      <Clock size={20} className={timerRunning && timeRemaining <= 5 ? 'text-red-500' : 'text-violet-500'} />
+                      <span className={`text-3xl font-mono font-bold ${
+                        timerRunning && timeRemaining <= 5 ? 'text-red-500 animate-pulse-glow' : 'text-violet-500'
+                      }`}>
+                        {timerRunning ? formatTime(timeRemaining) : formatTime(timeRemaining)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Item Name */}
+                <h2 className="text-4xl font-black text-slate-900 tracking-tight mb-2">
+                  {auction.item?.name}
+                </h2>
+                <p className="text-lg text-slate-400 mb-8">{auction.item?.category}</p>
+
+                {/* Big Bid Display */}
+                <div className="text-center py-8 bg-dark-700 rounded-2xl mb-8">
+                  <p className="text-sm font-mono text-slate-500 mb-2 tracking-widest">CURRENT BID</p>
+                  <p className="text-7xl font-black font-mono text-cyan-400 text-glow-cyan">
+                    <AnimatedNumber value={auction.current_bid} duration={400} />
+                  </p>
+                  <p className="text-lg font-mono text-slate-400 mt-2">TECH COINS</p>
+                </div>
+
+                {/* Leader */}
+
+                {/* Live Bid Feed */}
+                {bids.length > 0 && (
+                  <div className="mt-6">
+                    <p className="text-sm font-mono text-slate-500 mb-3 text-center tracking-wider">RECENT BIDS</p>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {bids.slice(0, 8).map((bid) => {
+                        const bidTeam = rankings.find(r => r.id === bid.team_id);
+                        return (
+                          <div key={bid.id} className="flex items-center justify-between p-2 rounded-lg bg-dark-700">
+                            <span className="text-sm font-bold text-slate-900">
+                              {bidTeam?.name || 'Team'}
+                            </span>
+                            <span className="text-lg font-mono font-bold text-cyan-400">
+                              {bid.amount} TC
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {auction.current_team_id && (
+                  <div className="text-center">
+                    <p className="text-sm font-mono text-slate-500 mb-2">CURRENT LEADER</p>
+                    <p className="text-3xl font-bold text-slate-900">
+                      {rankings.find(r => r.id === auction.current_team_id)?.name || 'Team'}
+                    </p>
+                  </div>
+                )}
+
+                {/* Question display */}
+                {auction.status === 'question' && (
+                  <div className="mt-8 p-6 bg-violet-500/5 border border-violet-500/20 rounded-xl">
+                    <p className="text-sm font-mono text-violet-400 mb-3">QUESTION</p>
+                    <p className="text-xl text-slate-900 leading-relaxed">{auction.item?.question}</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* No Active Auction */
+              <div className="card p-12 text-center">
+                <div className="animate-float mb-6">
+                  <Trophy className="mx-auto text-slate-600" size={64} />
+                </div>
+                <p className="text-3xl font-bold text-slate-400 mb-2">
+                  {isFinalized ? 'ROUND COMPLETE' : 'READY'}
+                </p>
+                <p className="text-lg text-slate-600 font-mono">
+                  {isFinalized ? 'Final results displayed on the right' : 'Waiting for the next auction...'}
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Right: Leaderboard */}
+          <div className="col-span-1">
+            <div className={`card ${isFinalized ? 'neon-border' : ''}`}>
+              <div className="flex items-center gap-2 mb-4">
+                <Trophy className="text-amber-400" size={18} />
+                <h3 className="text-lg font-bold text-slate-900">
+                  {isFinalized ? 'FINAL RESULTS' : 'LIVE LEADERBOARD'}
+                </h3>
+              </div>
+
+              <div className="space-y-2">
+                {rankings.map(team => (
+                  <div
+                    key={team.id}
+                    className={`flex items-center justify-between p-3 rounded-xl transition-all ${
+                      team.rank <= 4
+                        ? 'bg-cyan-500/5 border border-cyan-500/10'
+                        : 'bg-dark-700 border border-transparent'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className={`text-lg font-mono font-bold w-8 ${
+                        team.rank === 1 ? 'text-amber-400' :
+                        team.rank <= 4 ? 'text-cyan-400' : 'text-slate-600'
+                      }`}>
+                        {team.rank}
+                      </span>
+                      <div>
+                        <p className={`font-bold ${
+                          team.rank <= 4 ? 'text-slate-900' : 'text-slate-400'
+                        }`}>
+                          {team.name}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-xl font-mono font-bold ${
+                        team.rank <= 4 ? 'text-slate-900' : 'text-slate-500'
+                      }`}>
+                        {team.score}
+                      </p>
+                      <p className="text-xs font-mono text-cyan-400">{team.current_budget} TC</p>
+                    </div>
+                    {isFinalized && team.rank <= 4 && (
+                      <Badge variant="green" className="ml-2">✓</Badge>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {isFinalized && (
+                <div className="mt-6 pt-4 border-t border-dark-400">
+                  <p className="text-xs font-mono text-green-400 mb-2 tracking-wider">QUALIFIED FOR NEXT ROUND</p>
+                  {rankings.filter(r => r.qualified).map(team => (
+                    <p key={team.id} className="text-slate-900 font-bold">{team.name}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="text-center mt-6">
+          <p className="text-xs text-slate-700 font-mono">
+            TECH AUCTION — National Level Quiz Competition — Round 3
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
