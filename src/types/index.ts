@@ -2,6 +2,14 @@
 
 export type UserRole = 'admin' | 'team';
 export type AuctionStatus = 'scheduled' | 'open' | 'closed' | 'question' | 'completed' | 'cancelled';
+
+/** Fixed bidding window once an auction opens (seconds). */
+export const BIDDING_DURATION_SECONDS = 60;
+
+/** MCQ choice key for a question. */
+export type McqKey = 'A' | 'B' | 'C' | 'D';
+
+export const MCQ_KEYS: McqKey[] = ['A', 'B', 'C', 'D'];
 export type Difficulty = 'basic' | 'intermediate' | 'expert';
 export type ScoreTransactionType = 'reward' | 'penalty' | 'bonus' | 'manual_adjustment';
 export type BudgetTransactionType = 'starting_budget' | 'bid' | 'refund' | 'manual_adjustment';
@@ -58,6 +66,10 @@ export interface AuctionItem {
   penalty_points: number;
   question: string;
   correct_answer: string;
+  option_a: string | null;
+  option_b: string | null;
+  option_c: string | null;
+  option_d: string | null;
   hint: string | null;
   special_rule: string | null;
   image_url: string | null;
@@ -79,6 +91,8 @@ export interface Auction {
   timer_started_at: string | null;
   timer_duration: number;
   timer_paused: boolean;
+  /** Absolute deadline for the bidding phase (server clock). */
+  bidding_ends_at: string | null;
   started_at: string | null;
   closed_at: string | null;
   created_at: string;
@@ -103,8 +117,10 @@ export interface QuestionAttempt {
   team_id: string;
   result: AnswerResult;
   points_awarded: number;
+  /** MCQ choice the team picked ('A'–'D'), if the question had options. */
+  selected_answer: string | null;
   answered_at: string;
-  admin_id: string;
+  admin_id: string | null;
 }
 
 // ─── Score Transaction ───────────────────────────────────────────────────────
@@ -192,6 +208,7 @@ export interface PublicAuction {
   timer_started_at: string | null;
   timer_duration: number;
   timer_paused: boolean;
+  bidding_ends_at: string | null;
 }
 
 // ─── Admin-visible auction (with answer) ─────────────────────────────────────
@@ -214,7 +231,7 @@ export interface DisplayState {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-export const DIFFICULTY_PRESETS: Record<Difficulty, Omit<AuctionItem, 'id' | 'name' | 'category' | 'description' | 'question' | 'correct_answer' | 'sort_order' | 'is_active' | 'created_at' | 'hint' | 'special_rule' | 'image_url'>> = {
+export const DIFFICULTY_PRESETS: Record<Difficulty, Omit<AuctionItem, 'id' | 'name' | 'category' | 'description' | 'question' | 'correct_answer' | 'option_a' | 'option_b' | 'option_c' | 'option_d' | 'sort_order' | 'is_active' | 'created_at' | 'hint' | 'special_rule' | 'image_url'>> = {
   basic: {
     starting_bid: 50,
     minimum_increment: 10,

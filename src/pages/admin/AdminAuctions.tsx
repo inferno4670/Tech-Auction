@@ -20,7 +20,9 @@ interface ItemFormProps {
   form: {
     name: string; category: string; description: string; difficulty: Difficulty;
     starting_bid: number; minimum_increment: number; reward_points: number; penalty_points: number;
-    question: string; correct_answer: string; hint: string; special_rule: string;
+    question: string; correct_answer: string;
+    option_a: string; option_b: string; option_c: string; option_d: string;
+    hint: string; special_rule: string;
   };
   onFieldChange: <K extends keyof ItemFormProps['form']>(field: K, value: ItemFormProps['form'][K]) => void;
   onPreset: (diff: Difficulty) => void;
@@ -94,6 +96,26 @@ function ItemForm({ form, onFieldChange, onPreset, onSubmit, onCancel, saving, i
           <textarea value={form.correct_answer} onChange={e => onFieldChange('correct_answer', e.target.value)}
             className="input-field h-16 resize-none" required placeholder="Correct answer..." />
         </div>
+        <div className="col-span-2">
+          <label className="block text-xs font-mono text-slate-400 mb-1">
+            MCQ OPTIONS (optional — the winning team picks one when the question shows)
+          </label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {([
+              ['a', form.option_a], ['b', form.option_b],
+              ['c', form.option_c], ['d', form.option_d],
+            ] as const).map(([k, v]) => (
+              <div key={k} className="flex items-center gap-2">
+                <span className="w-7 h-7 shrink-0 rounded-md bg-dark-700 border border-dark-400 flex items-center justify-center font-mono text-xs font-bold text-slate-500">
+                  {k.toUpperCase()}
+                </span>
+                <input type="text" value={v}
+                  onChange={e => onFieldChange(`option_${k}` as 'option_a' | 'option_b' | 'option_c' | 'option_d', e.target.value)}
+                  className="input-field" placeholder={`Option ${k.toUpperCase()}`} />
+              </div>
+            ))}
+          </div>
+        </div>
         <div>
           <label className="block text-xs font-mono text-slate-400 mb-1">HINT (optional)</label>
           <input type="text" value={form.hint} onChange={e => onFieldChange('hint', e.target.value)}
@@ -127,7 +149,9 @@ export default function AdminAuctions() {
   const [form, setForm] = useState({
     name: '', category: '', description: '', difficulty: 'intermediate' as Difficulty,
     starting_bid: 100, minimum_increment: 25, reward_points: 150, penalty_points: 75,
-    question: '', correct_answer: '', hint: '', special_rule: '',
+    question: '', correct_answer: '',
+    option_a: '', option_b: '', option_c: '', option_d: '',
+    hint: '', special_rule: '',
   });
 
   const loadItems = async () => {
@@ -147,7 +171,9 @@ export default function AdminAuctions() {
     setForm({
       name: '', category: '', description: '', difficulty: 'intermediate',
       starting_bid: 100, minimum_increment: 25, reward_points: 150, penalty_points: 75,
-      question: '', correct_answer: '', hint: '', special_rule: '',
+      question: '', correct_answer: '',
+      option_a: '', option_b: '', option_c: '', option_d: '',
+      hint: '', special_rule: '',
     });
   };
 
@@ -168,6 +194,10 @@ export default function AdminAuctions() {
     try {
       await createAuctionItem({
         ...form,
+        option_a: form.option_a.trim() || null,
+        option_b: form.option_b.trim() || null,
+        option_c: form.option_c.trim() || null,
+        option_d: form.option_d.trim() || null,
         image_url: null,
         sort_order: items.length + 1,
         is_active: true,
@@ -187,7 +217,13 @@ export default function AdminAuctions() {
     if (!editItem) return;
     setSaving(true);
     try {
-      await updateAuctionItem(editItem.id, form);
+      await updateAuctionItem(editItem.id, {
+        ...form,
+        option_a: form.option_a.trim() || null,
+        option_b: form.option_b.trim() || null,
+        option_c: form.option_c.trim() || null,
+        option_d: form.option_d.trim() || null,
+      });
       await logEvent('item_updated', 'auction_item', editItem.id, { name: form.name });
       setEditItem(null);
       resetForm();
@@ -240,7 +276,10 @@ export default function AdminAuctions() {
       difficulty: item.difficulty, starting_bid: item.starting_bid,
       minimum_increment: item.minimum_increment, reward_points: item.reward_points,
       penalty_points: item.penalty_points, question: item.question,
-      correct_answer: item.correct_answer, hint: item.hint || '',
+      correct_answer: item.correct_answer,
+      option_a: item.option_a || '', option_b: item.option_b || '',
+      option_c: item.option_c || '', option_d: item.option_d || '',
+      hint: item.hint || '',
       special_rule: item.special_rule || '',
     });
     setEditItem(item);
@@ -289,6 +328,9 @@ export default function AdminAuctions() {
                     {item.difficulty.toUpperCase()}
                   </Badge>
                   {!item.is_active && <Badge>INACTIVE</Badge>}
+                  {(item.option_a || item.option_b || item.option_c || item.option_d) && (
+                    <Badge variant="violet">MCQ</Badge>
+                  )}
                   {item.special_rule && <Badge variant="amber">{item.special_rule}</Badge>}
                 </div>
                 <p className="text-sm text-slate-400 mb-2">{item.category}</p>

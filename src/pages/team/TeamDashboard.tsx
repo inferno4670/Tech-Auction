@@ -2,16 +2,19 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { getTeamForUser } from '../../lib/auth';
 import {
-  getRankings, getCurrentAuction, getEventSettings, placeBid, getBidsForAuction
+  getRankings, getCurrentAuction, getEventSettings, placeBid, getBidsForAuction,
+  submitTeamAnswer, getAttemptsForAuction, closeBidding
 } from '../../lib/queries';
 import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
 import { StatCard, Badge, LoadingSpinner } from '../../components/ui';
 import { AnimatedNumber } from '../../components/ui/AnimatedNumber';
 import { formatTime, getDifficultyColor } from '../../lib/utils';
-import type { Team, TeamWithRank, AuctionWithItem, EventSettings, Bid } from '../../types';
+import { syncServerTime, serverNow, remainingSeconds } from '../../lib/serverTime';
+import type { Team, TeamWithRank, AuctionWithItem, EventSettings, Bid, QuestionAttempt } from '../../types';
+import { MCQ_KEYS } from '../../types';
 import {
   Coins, Trophy, Medal, Gavel, Zap, AlertCircle,
-  CheckCircle, XCircle, Timer
+  CheckCircle, XCircle, Timer, Clock
 } from 'lucide-react';
 
 type TeamViewState =
@@ -35,12 +38,16 @@ export default function TeamDashboard() {
   const [bidLoading, setBidLoading] = useState(false);
   // const [connectionStatus, setConnectionStatus] = useState<'live' | 'reconnecting' | 'offline'>('live');
   const [bids, setBids] = useState<Bid[]>([]);
+  const [myAttempt, setMyAttempt] = useState<QuestionAttempt | null>(null);
+  const [answerLoading, setAnswerLoading] = useState(false);
+  const [answerError, setAnswerError] = useState('');
 
   const mountedRef = useRef(true);
   const loadIdRef = useRef(0); // prevents stale responses from overwriting fresh data
 
   useEffect(() => {
     mountedRef.current = true;
+    syncServerTime();
     return () => { mountedRef.current = false; };
   }, []);
 
@@ -69,8 +76,21 @@ export default function TeamDashboard() {
         } catch {
           // bid fetch failed, keep existing bids
         }
+        if (auctionData.status === 'question') {
+          try {
+            const at = await getAttemptsForAuction(auctionData.id);
+            if (mountedRef.current && myLoadId === loadIdRef.current) {
+              setMyAttempt(at.find(x => x.team_id === t?.id) || null);
+            }
+          } catch {
+            // attempts fetch failed, keep existing
+          }
+        } else if (mountedRef.current && myLoadId === loadIdRef.current) {
+          setMyAttempt(null);
+        }
       } else {
         setBids([]);
+        setMyAttempt(null);
       }
     } catch (err) {
       console.error('TeamDashboard loadData error:', err);
@@ -98,21 +118,43 @@ export default function TeamDashboard() {
     loadData();
   });
 
-  // Timer countdown — re-renders every second
+  // Timers — derived from DB timestamps against the SERVER clock so every
+  // panel ticks identically (fixes fast/slow drift and countdown jumps).
   const [, setTick] = useState(0);
   const timerRunning = auction?.status === 'question' && auction.timer_started_at != null && !auction.timer_paused;
   const timeRemaining = (() => {
     if (!auction?.timer_started_at || auction.status !== 'question') return 0;
     if (auction.timer_paused) return auction.timer_duration;
-    const elapsed = Math.floor((Date.now() - new Date(auction.timer_started_at).getTime()) / 1000);
+    const elapsed = Math.floor((serverNow() - new Date(auction.timer_started_at).getTime()) / 1000);
     return Math.max(0, auction.timer_duration - elapsed);
   })();
 
+  // 60s bidding countdown — one absolute deadline (auction.bidding_ends_at)
+  const biddingHasDeadline = auction?.status === 'open' && !!auction.bidding_ends_at;
+  const biddingRemaining = auction?.status === 'open' ? remainingSeconds(auction.bidding_ends_at) : 0;
+
   useEffect(() => {
-    if (!timerRunning) return;
-    const interval = setInterval(() => setTick(t => t + 1), 1000);
+    if (!timerRunning && !biddingHasDeadline) return;
+    const interval = setInterval(() => setTick(t => t + 1), 500);
     return () => clearInterval(interval);
-  }, [timerRunning]);
+  }, [timerRunning, biddingHasDeadline]);
+
+  // First client to notice expiry settles the round via the atomic RPC
+  // (idempotent + deadline re-checked server-side, so racing callers are safe).
+  const autoCloseRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (auction?.status !== 'open') { autoCloseRef.current = null; return; }
+    if (!biddingHasDeadline || biddingRemaining > 0 || !auction) return;
+    if (autoCloseRef.current === auction.id) return;
+    autoCloseRef.current = auction.id;
+    closeBidding(auction.id, false)
+      .then(res => {
+        if (!res?.ok && res?.error === 'not_expired') {
+          setTimeout(() => { autoCloseRef.current = null; }, 1500);
+        }
+      })
+      .catch(() => { autoCloseRef.current = null; });
+  }, [biddingHasDeadline, biddingRemaining, auction]);
 
 
   if (loading) {
@@ -144,16 +186,20 @@ export default function TeamDashboard() {
   let stateMessage = 'Waiting for Quizmaster...';
   let stateColor = 'text-slate-400';
 
-  if (isFinalized) {
+    if (isFinalized) {
     viewState = 'finalized';
     stateMessage = myRank?.qualified ? 'YOU QUALIFIED FOR THE NEXT ROUND' : 'ROUND COMPLETE';
     stateColor = myRank?.qualified ? 'text-green-400' : 'text-slate-500';
   } else if (isPaused) {
     stateMessage = 'ROUND PAUSED';
     stateColor = 'text-amber-400';
-  } else if (auction) {
+  } else  if (auction) {
     if (auction.status === 'open') {
-      if (auction.current_team_id === team.id) {
+      if (biddingHasDeadline && biddingRemaining <= 0) {
+        viewState = 'auction_live';
+        stateMessage = 'BIDDING CLOSED — SETTLING…';
+        stateColor = 'text-amber-400';
+      } else if (auction.current_team_id === team.id) {
         viewState = 'winning';
         stateMessage = 'You are currently the highest bidder';
         stateColor = 'text-green-400';
@@ -204,7 +250,16 @@ export default function TeamDashboard() {
     minBid + 100,
   ].filter(b => b <= team.current_budget) : [];
 
-  const canBid = auction?.status === 'open' && team.current_budget >= minBid;
+  const canBid = auction?.status === 'open' && team.current_budget >= minBid
+    && (!biddingHasDeadline || biddingRemaining > 0);
+
+  // MCQ options for the current item (non-empty)
+  const liveItem = auction?.item;
+  const questionOptions = liveItem
+    ? (['option_a', 'option_b', 'option_c', 'option_d'] as const)
+        .map(k => liveItem[k])
+        .filter((v): v is string => !!v && v.trim() !== '')
+    : [];
 
   const handlePlaceBid = async (amount: number) => {
     if (!auction || !team) return;
@@ -217,6 +272,22 @@ export default function TeamDashboard() {
       setBidError(err.message || 'Failed to place bid');
     } finally {
       setBidLoading(false);
+    }
+  };
+
+  // Winning team picks an MCQ option — stored as a pending attempt that the
+  // quizmaster then grades (MARK CORRECT / MARK WRONG).
+  const handleSelectAnswer = async (answer: string) => {
+    if (!auction || !team) return;
+    setAnswerError('');
+    setAnswerLoading(true);
+    try {
+      const attempt = await submitTeamAnswer(auction.id, team.id, answer);
+      setMyAttempt(attempt);
+    } catch (err: any) {
+      setAnswerError(err.message || 'Failed to submit answer');
+    } finally {
+      setAnswerLoading(false);
     }
   };
 
@@ -310,16 +381,32 @@ export default function TeamDashboard() {
             </div>
             <div className="text-center p-4 bg-dark-700 rounded-xl">
               <p className="text-xs font-mono text-slate-500 mb-1">YOUR BUDGET</p>
-              <p className="text-2xl font-mono font-bold text-slate-900">
+              <div className="text-2xl font-mono font-bold text-slate-900">
                 <AnimatedNumber value={team.current_budget} duration={700} suffix=" TC" />
-              </p>
+              </div>
             </div>
           </div>
 
-          {/* Reward/Penalty */}
-          <div className="flex items-center gap-6 mb-6 text-sm font-mono">
-            <span className="text-green-400">Reward: +{auction.item?.reward_points}</span>
-            <span className="text-red-400">Penalty: -{auction.item?.penalty_points}</span>
+          {/* Scoring rules + live bidding countdown */}
+          <div className="flex flex-wrap items-center gap-6 mb-6 text-sm font-mono">
+            <span className="text-green-400">
+              {auction.status === 'question' && auction.winning_bid
+                ? `Correct: +${auction.winning_bid + 150} TC`
+                : 'Correct: bid + 150 TC'}
+            </span>
+            <span className="text-red-400">
+              {auction.status === 'question' && auction.winning_bid
+                ? `Wrong: -${auction.winning_bid} TC (bid lost)`
+                : 'Wrong: -bid TC'}
+            </span>
+            {auction.status === 'open' && biddingHasDeadline && (
+              <span className={`flex items-center gap-2 ${
+                biddingRemaining <= 10 ? 'text-red-400 font-bold animate-pulse-glow' : 'text-slate-500'
+              }`}>
+                <Clock size={14} />
+                Bidding ends in {formatTime(biddingRemaining)}
+              </span>
+            )}
           </div>
 
           {/* Bidding Controls (only when auction is open) */}
@@ -389,6 +476,44 @@ export default function TeamDashboard() {
                 )}
               </div>
               <p className="text-slate-900 text-lg leading-relaxed">{auction.item?.question}</p>
+
+              {/* MCQ Options */}
+              {questionOptions.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {questionOptions.map((opt, i) => {
+                    const key = MCQ_KEYS[i];
+                    const picked = myAttempt?.selected_answer === opt;
+                    return (
+                      <button key={key}
+                        onClick={() => handleSelectAnswer(opt)}
+                        disabled={!!myAttempt?.selected_answer || answerLoading}
+                        className={`w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-all ${
+                          picked
+                            ? 'bg-violet-500/15 border-violet-500/50'
+                            : 'bg-dark-700 border-dark-400 hover:border-violet-500/40 disabled:opacity-60'
+                        }`}>
+                        <span className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center font-mono font-bold text-sm ${
+                          picked ? 'bg-violet-500 text-white' : 'bg-dark-600 text-slate-500'
+                        }`}>
+                          {key}
+                        </span>
+                        <span className="flex-1 font-medium text-slate-900">{opt}</span>
+                        {picked && <CheckCircle className="text-violet-500" size={18} />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {answerError && (
+                <p className="text-red-400 text-sm font-mono mt-2">{answerError}</p>
+              )}
+              {myAttempt?.selected_answer && (
+                <p className="text-sm font-mono text-violet-400 mt-3 flex items-center gap-2">
+                  <CheckCircle size={14} />
+                  Answer submitted — waiting for the quizmaster.
+                </p>
+              )}
             </div>
           )}
         </div>

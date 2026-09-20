@@ -1,0 +1,11 @@
+-- Hardening follow-up applied directly via Supabase MCP after 008:
+--
+--   ALTER FUNCTION public.get_server_time() SET search_path = '';
+--
+-- Rationale: security advisor lint 0011 (function_search_path_mutable).
+-- now() lives in pg_catalog, which is always reachable, so an empty
+-- search_path is safe. close_bidding already sets `SET search_path = public`.
+--
+-- Note: close_bidding intentionally remains EXECUTE-granted to `anon` — the
+-- projector route (/display) has no auth and fires the auto-close RPC.
+-- The force=true path enforces the admin role inside the function.

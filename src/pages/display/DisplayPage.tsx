@@ -1,13 +1,15 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  getRankings, getCurrentAuction, getEventSettings, getBidsForAuction
+  getRankings, getCurrentAuction, getEventSettings, getBidsForAuction, closeBidding
 } from '../../lib/queries';
 import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
 import { Badge } from '../../components/ui';
 import { AnimatedNumber } from '../../components/ui/AnimatedNumber';
 import { formatTime } from '../../lib/utils';
+import { syncServerTime, serverNow, remainingSeconds } from '../../lib/serverTime';
 import type { TeamWithRank, AuctionWithItem, EventSettings, Bid } from '../../types';
-import { Zap, Trophy, Clock } from 'lucide-react';
+import { MCQ_KEYS } from '../../types';
+import { Zap, Trophy, Clock, Gavel } from 'lucide-react';
 
 export default function DisplayPage() {
   const [rankings, setRankings] = useState<TeamWithRank[]>([]);
@@ -21,6 +23,7 @@ export default function DisplayPage() {
 
   useEffect(() => {
     mountedRef.current = true;
+    syncServerTime();
     return () => { mountedRef.current = false; };
   }, []);
 
@@ -69,21 +72,42 @@ export default function DisplayPage() {
     loadData();
   });
 
-  // Timer countdown
+  // Timers — server-clock based so the projector ticks in lock-step with the
+  // admin panel and every team dashboard.
   const [, setTick] = useState(0);
   const timerRunning = auction?.status === 'question' && auction.timer_started_at != null && !auction.timer_paused;
   const timeRemaining = (() => {
     if (!auction?.timer_started_at || auction.status !== 'question') return 0;
     if (auction.timer_paused) return auction.timer_duration;
-    const elapsed = Math.floor((Date.now() - new Date(auction.timer_started_at).getTime()) / 1000);
+    const elapsed = Math.floor((serverNow() - new Date(auction.timer_started_at).getTime()) / 1000);
     return Math.max(0, auction.timer_duration - elapsed);
   })();
 
+  // 60s bidding countdown
+  const biddingHasDeadline = auction?.status === 'open' && !!auction.bidding_ends_at;
+  const biddingRemaining = auction?.status === 'open' ? remainingSeconds(auction.bidding_ends_at) : 0;
+
   useEffect(() => {
-    if (!timerRunning) return;
-    const interval = setInterval(() => setTick(t => t + 1), 1000);
+    if (!timerRunning && !biddingHasDeadline) return;
+    const interval = setInterval(() => setTick(t => t + 1), 500);
     return () => clearInterval(interval);
-  }, [timerRunning]);
+  }, [timerRunning, biddingHasDeadline]);
+
+  // The display can also settle the round when the 60s window expires.
+  const autoCloseRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (auction?.status !== 'open') { autoCloseRef.current = null; return; }
+    if (!biddingHasDeadline || biddingRemaining > 0 || !auction) return;
+    if (autoCloseRef.current === auction.id) return;
+    autoCloseRef.current = auction.id;
+    closeBidding(auction.id, false)
+      .then(res => {
+        if (!res?.ok && res?.error === 'not_expired') {
+          setTimeout(() => { autoCloseRef.current = null; }, 1500);
+        }
+      })
+      .catch(() => { autoCloseRef.current = null; });
+  }, [biddingHasDeadline, biddingRemaining, auction]);
 
   if (loading) {
     return (
@@ -140,13 +164,23 @@ export default function DisplayPage() {
                        auction.status.toUpperCase()}
                     </Badge>
                   </div>
+                  {auction.status === 'open' && biddingHasDeadline && (
+                    <div className="flex items-center gap-2">
+                      <Gavel size={20} className={biddingRemaining <= 10 ? 'text-red-500' : 'text-cyan-400'} />
+                      <span className={`text-3xl font-mono font-bold ${
+                        biddingRemaining <= 10 ? 'text-red-500 animate-pulse-glow' : 'text-cyan-400'
+                      }`}>
+                        {formatTime(biddingRemaining)}
+                      </span>
+                    </div>
+                  )}
                   {auction.status === 'question' && (
                     <div className="flex items-center gap-2">
                       <Clock size={20} className={timerRunning && timeRemaining <= 5 ? 'text-red-500' : 'text-violet-500'} />
                       <span className={`text-3xl font-mono font-bold ${
                         timerRunning && timeRemaining <= 5 ? 'text-red-500 animate-pulse-glow' : 'text-violet-500'
                       }`}>
-                        {timerRunning ? formatTime(timeRemaining) : formatTime(timeRemaining)}
+                        {formatTime(timeRemaining)}
                       </span>
                     </div>
                   )}
@@ -161,10 +195,12 @@ export default function DisplayPage() {
                 {/* Big Bid Display */}
                 <div className="text-center py-8 bg-dark-700 rounded-2xl mb-8">
                   <p className="text-sm font-mono text-slate-500 mb-2 tracking-widest">CURRENT BID</p>
-                  <p className="text-7xl font-black font-mono text-cyan-400 text-glow-cyan">
+                  <div className="text-7xl font-black font-mono text-cyan-400 text-glow-cyan">
                     <AnimatedNumber value={auction.current_bid} duration={400} />
-                  </p>
+                  </div>
                   <p className="text-lg font-mono text-slate-400 mt-2">TECH COINS</p>
+                  {/* NOTE: the big number above is a <div> — AnimatedNumber renders a <div>,
+                      which cannot nest inside a <p> (React DOM nesting warning). */}
                 </div>
 
                 {/* Leader */}
@@ -193,18 +229,39 @@ export default function DisplayPage() {
 
                 {auction.current_team_id && (
                   <div className="text-center">
-                    <p className="text-sm font-mono text-slate-500 mb-2">CURRENT LEADER</p>
+                    <p className="text-sm font-mono text-slate-500 mb-2">
+                      {auction.status === 'question' ? 'ROUND WINNER' : 'CURRENT LEADER'}
+                    </p>
                     <p className="text-3xl font-bold text-slate-900">
                       {rankings.find(r => r.id === auction.current_team_id)?.name || 'Team'}
                     </p>
                   </div>
                 )}
 
-                {/* Question display */}
+                {/* Question display — MCQ options shown to the audience */}
                 {auction.status === 'question' && (
                   <div className="mt-8 p-6 bg-violet-500/5 border border-violet-500/20 rounded-xl">
                     <p className="text-sm font-mono text-violet-400 mb-3">QUESTION</p>
                     <p className="text-xl text-slate-900 leading-relaxed">{auction.item?.question}</p>
+                    {(() => {
+                      const opts = (['option_a', 'option_b', 'option_c', 'option_d'] as const)
+                        .map(k => auction.item?.[k])
+                        .filter((v): v is string => !!v && v.trim() !== '');
+                      if (opts.length === 0) return null;
+                      return (
+                        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {opts.map((opt, i) => (
+                            <div key={MCQ_KEYS[i]}
+                              className="flex items-center gap-3 p-4 rounded-xl bg-dark-700 border border-dark-400">
+                              <span className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center font-mono font-bold text-sm bg-dark-600 text-slate-500">
+                                {MCQ_KEYS[i]}
+                              </span>
+                              <span className="flex-1 font-medium text-slate-900">{opt}</span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
               </div>

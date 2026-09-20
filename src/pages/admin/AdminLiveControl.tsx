@@ -2,13 +2,16 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import {
   getActiveAuctionItems, getCurrentAuction, getTeams, getEventSettings,
-  getRankings, startAuction, updateAuction, closeAuction,
-  finalizeAuction, recordAnswer, applyBonus, adjustBudget, logEvent, getBidsForAuction
+  getRankings, startAuction, updateAuction,
+  closeBidding, recordAnswer, applyBonus, adjustBudget, logEvent,
+  getBidsForAuction, getAttemptsForAuction
 } from '../../lib/queries';
+import { syncServerTime, serverNow, serverNowIso, remainingSeconds } from '../../lib/serverTime';
 import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
 import { Badge, ConfirmModal, Modal, LoadingSpinner } from '../../components/ui';
 import { formatTime, getDifficultyColor } from '../../lib/utils';
-import type { TeamWithRank, AuctionItem, AuctionWithItem, EventSettings, Bid } from '../../types';
+import type { TeamWithRank, AuctionItem, AuctionWithItem, EventSettings, Bid, QuestionAttempt } from '../../types';
+import { MCQ_KEYS } from '../../types';
 import {
   Pause, Square, Gavel, Clock, CheckCircle,
   XCircle, ChevronRight, SkipForward, Award, Loader2, Zap, Coins
@@ -35,12 +38,14 @@ export default function AdminLiveControl() {
   const [tcReason, setTcReason] = useState("");
   const [tcMode, setTcMode] = useState<"add" | "deduct">("add");
   const [processing, setProcessing] = useState(false);
+  const [attempts, setAttempts] = useState<QuestionAttempt[]>([]);
 
   const mountedRef = useRef(true);
   const loadIdRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
+    syncServerTime();
     return () => { mountedRef.current = false; };
   }, []);
 
@@ -65,6 +70,18 @@ export default function AdminLiveControl() {
           }
         } catch {
           // bid fetch failed, keep existing bids
+        }
+        if (a.status === 'question') {
+          try {
+            const at = await getAttemptsForAuction(a.id);
+            if (mountedRef.current && myLoadId === loadIdRef.current) {
+              setAttempts(at);
+            }
+          } catch {
+            // attempts fetch failed, keep existing
+          }
+        } else if (mountedRef.current && myLoadId === loadIdRef.current) {
+          setAttempts([]);
         }
       } else {
         setBids([]);
@@ -95,24 +112,61 @@ export default function AdminLiveControl() {
     loadData();
   });
 
-  // Timer tick — re-renders every second so computed timeRemaining updates
+  // Timers — both derived from DB timestamps evaluated against the SERVER
+  // clock (serverTime.ts). Admin, team dashboards and the projector all tick
+  // in lock-step regardless of local device clock drift.
   const timerRunning = auction?.status === 'question' && auction.timer_started_at != null && !auction.timer_paused;
   const timeRemaining = (() => {
     if (!auction?.timer_started_at || auction.status !== 'question') return 0;
     if (auction.timer_paused) return auction.timer_duration;
-    const elapsed = Math.floor((Date.now() - new Date(auction.timer_started_at).getTime()) / 1000);
+    const elapsed = Math.floor((serverNow() - new Date(auction.timer_started_at).getTime()) / 1000);
     return Math.max(0, auction.timer_duration - elapsed);
   })();
 
+  // 60s bidding countdown — one absolute deadline (auction.bidding_ends_at).
+  const biddingHasDeadline = auction?.status === 'open' && !!auction.bidding_ends_at;
+  const biddingRemaining = auction?.status === 'open' ? remainingSeconds(auction.bidding_ends_at) : 0;
+
   useEffect(() => {
-    if (!timerRunning) return;
-    const interval = setInterval(() => setTick(t => t + 1), 1000);
+    if (!timerRunning && !biddingHasDeadline) return;
+    const interval = setInterval(() => setTick(t => t + 1), 500);
     return () => clearInterval(interval);
-  }, [timerRunning]);
+  }, [timerRunning, biddingHasDeadline]);
+
+  // Auto-close: the first client to notice expiry settles the round through
+  // the atomic RPC (safe to race — it re-checks the deadline server-side and
+  // is idempotent, so admin + teams + display can all fire it at once).
+  const autoCloseRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (auction?.status !== 'open') { autoCloseRef.current = null; return; }
+    if (!biddingHasDeadline || biddingRemaining > 0 || !auction) return;
+    if (autoCloseRef.current === auction.id) return;
+    autoCloseRef.current = auction.id;
+    closeBidding(auction.id, false)
+      .then(res => {
+        if (!res?.ok && res?.error === 'not_expired') {
+          // Clock-skew guard: allow a retry shortly.
+          setTimeout(() => { autoCloseRef.current = null; }, 1500);
+        }
+      })
+      .catch(() => { autoCloseRef.current = null; });
+  }, [biddingHasDeadline, biddingRemaining, auction]);
 
   const currentLeader = auction?.current_team_id
     ? teams.find((t: any) => t.id === auction.current_team_id)
     : null;
+
+  // MCQ options for the current item (non-empty), and the winning team's pick
+  const liveItem = auction?.item;
+  const itemOptions = liveItem
+    ? (['option_a', 'option_b', 'option_c', 'option_d'] as const)
+        .map(k => liveItem[k])
+        .filter((v): v is string => !!v && v.trim() !== '')
+    : [];
+  const winningTeamId = auction?.winning_team_id ?? null;
+  const winningAttempt = winningTeamId
+    ? attempts.find(a => a.team_id === winningTeamId)
+    : undefined;
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
@@ -133,15 +187,15 @@ export default function AdminLiveControl() {
     if (!auction) return;
     setProcessing(true);
     try {
-      if (auction.current_team_id) {
-        // Auto-determine winner and move to question phase
-        await finalizeAuction(auction.id, auction.current_team_id, auction.current_bid);
+      // Server-authoritative: the RPC picks the true highest bidder (ties go
+      // to the earlier bid) and settles the budget in ONE transaction — no
+      // stale client state can crown a different winner than the teams see.
+      const res = await closeBidding(auction.id, true);
+      if (res?.winning_team_id) {
         await logEvent('bidding_closed_winner', 'auction', auction.id, {
-          team_id: auction.current_team_id, bid: auction.current_bid
+          team_id: res.winning_team_id, bid: res.winning_bid
         });
       } else {
-        // No bids — just close
-        await closeAuction(auction.id);
         await logEvent('bidding_closed_no_bids', 'auction', auction.id);
       }
       await loadData();
@@ -272,6 +326,19 @@ export default function AdminLiveControl() {
                 </div>
                 <p className="text-sm text-slate-400">{auction.item.category}</p>
               </div>
+              {auction.status === 'open' && biddingHasDeadline && (
+                <div className="text-right">
+                  <p className="text-xs text-slate-500 font-mono mb-1">BIDDING ENDS IN</p>
+                  <p className={`text-4xl font-mono font-bold ${
+                    biddingRemaining <= 10 ? 'text-red-400 animate-pulse-glow' : 'text-cyan-400'
+                  }`}>
+                    {formatTime(biddingRemaining)}
+                  </p>
+                  {biddingRemaining <= 0 && (
+                    <p className="text-xs text-red-400 font-mono animate-pulse-glow">CLOSING…</p>
+                  )}
+                </div>
+              )}
               {(timerRunning || auction.timer_paused) && auction.status === 'question' && (
                 <div className="text-right">
                   <p className="text-xs text-slate-500 font-mono mb-1">
@@ -304,10 +371,18 @@ export default function AdminLiveControl() {
               </div>
             </div>
 
-            {/* Reward/Penalty Display */}
-            <div className="flex items-center gap-6 mb-6 text-sm font-mono">
-              <span className="text-green-400">Reward: +{auction.item.reward_points}</span>
-              <span className="text-red-400">Penalty: -{auction.item.penalty_points}</span>
+            {/* Actual scoring rules */}
+            <div className="flex flex-wrap items-center gap-6 mb-6 text-sm font-mono">
+              <span className="text-green-400">
+                {auction.status === 'question' && auction.winning_bid
+                  ? `Correct: +${auction.winning_bid + 150} TC`
+                  : 'Correct: bid + 150 TC'}
+              </span>
+              <span className="text-red-400">
+                {auction.status === 'question' && auction.winning_bid
+                  ? `Wrong: -${auction.winning_bid} TC (bid lost)`
+                  : 'Wrong: -bid TC'}
+              </span>
               {auction.item.special_rule && (
                 <span className="text-amber-400">Special: {auction.item.special_rule}</span>
               )}
@@ -341,7 +416,7 @@ export default function AdminLiveControl() {
                     if (!auction) return;
                     const duration = settings?.default_question_time || 20;
                     await updateAuction(auction.id, {
-                      timer_started_at: new Date().toISOString(),
+                      timer_started_at: serverNowIso(),
                       timer_duration: duration,
                       timer_paused: false,
                     });
@@ -365,10 +440,10 @@ export default function AdminLiveControl() {
                   {!timerRunning && auction.timer_paused && (
                     <button onClick={async () => {
                       if (!auction) return;
-                      await updateAuction(auction.id, {
-                        timer_started_at: new Date().toISOString(),
-                        timer_paused: false,
-                      });
+                    await updateAuction(auction.id, {
+                      timer_started_at: serverNowIso(),
+                      timer_paused: false,
+                    });
                     }} className="btn-success flex items-center gap-2">
                       <Clock size={14} /> Resume ({timeRemaining}s)
                     </button>
@@ -376,11 +451,11 @@ export default function AdminLiveControl() {
                   <div className="w-px bg-dark-400" />
                   <button onClick={() => handleMarkAnswer('correct')} className="btn-success flex items-center gap-2"
                     disabled={processing}>
-                    <CheckCircle size={16} /> MARK CORRECT (+{auction.item.reward_points})
+                    <CheckCircle size={16} /> MARK CORRECT (team gets bid + 150 TC)
                   </button>
                   <button onClick={() => handleMarkAnswer('wrong')} className="btn-danger flex items-center gap-2"
                     disabled={processing}>
-                    <XCircle size={16} /> MARK WRONG (-{auction.item.penalty_points})
+                    <XCircle size={16} /> MARK WRONG (team loses bid — no extra penalty)
                   </button>
                   <button onClick={() => setShowSkipConfirm(true)} className="btn-secondary flex items-center gap-2 text-sm">
                     <SkipForward size={14} /> Skip
@@ -441,16 +516,57 @@ export default function AdminLiveControl() {
           {/* Question Panel */}
           {auction.status === 'question' && (
             <div className="card neon-border-violet">
-              <div className="flex items-center gap-2 mb-4">
-                <Zap className="text-violet-400" size={18} />
-                <h3 className="text-lg font-bold text-violet-400">QUESTION</h3>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Zap className="text-violet-400" size={18} />
+                  <h3 className="text-lg font-bold text-violet-400">QUESTION</h3>
+                </div>
+                {auction.winning_team_id && (
+                  <p className="text-sm font-mono text-violet-400">
+                    {teams.find((t: any) => t.id === auction.winning_team_id)?.name || 'Winning team'} is answering
+                  </p>
+                )}
               </div>
               <div className="bg-dark-700 rounded-xl p-6 mb-4">
                 <p className="text-slate-900 text-lg leading-relaxed">{auction.item.question}</p>
               </div>
+
+              {/* MCQ Options + the team's submitted pick */}
+              {itemOptions.length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                  {itemOptions.map((opt, i) => {
+                    const key = MCQ_KEYS[i];
+                    const isTeamPick = !!winningAttempt?.selected_answer && winningAttempt.selected_answer === opt;
+                    return (
+                      <div key={key}
+                        className={`flex items-center gap-3 p-4 rounded-xl border transition-all ${
+                          isTeamPick
+                            ? 'bg-violet-500/10 border-violet-500/40'
+                            : 'bg-dark-700 border-dark-400'
+                        }`}>
+                        <span className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center font-mono font-bold text-sm ${
+                          isTeamPick ? 'bg-violet-500 text-white' : 'bg-dark-600 text-slate-500'
+                        }`}>
+                          {key}
+                        </span>
+                        <span className={`flex-1 font-medium ${isTeamPick ? 'text-slate-900' : 'text-slate-600'}`}>
+                          {opt}
+                        </span>
+                        {isTeamPick && <Badge variant="violet">TEAM PICK</Badge>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {winningAttempt?.selected_answer && (
+                <p className="text-sm font-mono text-violet-400 mb-4">
+                  Answer submitted — waiting for your grading.
+                </p>
+              )}
+
               <div className="bg-dark-700 rounded-xl p-4 border border-amber-500/20">
-                <p className="text-xs font-mono text-amber-400 mb-1">CORRECT ANSWER (Admin Only)</p>
-                <p className="text-amber-200 font-mono">{auction.item.correct_answer}</p>
+                <p className="text-xs font-mono text-amber-600 mb-1">CORRECT ANSWER (Admin Only)</p>
+                <p className="text-amber-600 font-bold font-mono">{auction.item.correct_answer}</p>
               </div>
             </div>
           )}

@@ -1,4 +1,6 @@
 import { supabase } from './supabase';
+import { serverNow, serverNowIso } from './serverTime';
+import { BIDDING_DURATION_SECONDS } from '../types';
 import type {
   Team,
   AuctionItem,
@@ -19,10 +21,12 @@ export async function getEventSettings(): Promise<EventSettings | null> {
     .select('*')
     .order('created_at', { ascending: false })
     .limit(1)
-    .single();
+    // maybeSingle: an empty table is normal pre-setup, not an error
+    // (.single() turned every empty fetch into a noisy 406/PGRST116).
+    .maybeSingle();
 
   if (error) return null;
-  return data as EventSettings;
+  return data as EventSettings | null;
 }
 
 export async function updateEventSettings(
@@ -118,7 +122,8 @@ export async function getRankings(): Promise<TeamWithRank[]> {
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       if (b.current_budget !== a.current_budget) return b.current_budget - a.current_budget;
-      return b.correct_answers - a.correct_answers;
+      if (b.correct_answers !== a.correct_answers) return b.correct_answers - a.correct_answers;
+      return a.name.localeCompare(b.name);
     });
 
   return sorted.map((team, index) => ({
@@ -197,8 +202,13 @@ export async function getCurrentAuction(): Promise<AuctionWithItem | null> {
     .select('*, item:auction_items(*)')
     .in('status', ['open', 'closed', 'question'])
     .order('created_at', { ascending: false })
+    // Deterministic tie-break: two auctions inserted in the same instant used
+    // to resolve to DIFFERENT rows on different clients (admin watched one,
+    // teams another — the "wrong team got the question" glitch).
+    .order('id', { ascending: false })
     .limit(1)
-    .single();
+    // maybeSingle: "no live auction" is a normal state, not an error.
+    .maybeSingle();
 
   if (error) return null;
   return data as unknown as AuctionWithItem;
@@ -216,6 +226,17 @@ export async function getAuctionWithItem(auctionId: string): Promise<AuctionWith
 }
 
 export async function startAuction(itemId: string, timerDuration: number): Promise<Auction> {
+  // Only one live auction at a time — a second concurrent row used to make
+  // different clients resolve "the current auction" differently.
+  const { data: activeAuction } = await supabase
+    .from('auctions')
+    .select('id')
+    .in('status', ['open', 'closed', 'question'])
+    .limit(1);
+  if (activeAuction && activeAuction.length > 0) {
+    throw new Error('Another auction is still active. Close or skip it first.');
+  }
+
   // Get the item's starting bid
   const item = await supabase
     .from('auction_items')
@@ -232,7 +253,10 @@ export async function startAuction(itemId: string, timerDuration: number): Promi
       status: 'open',
       current_bid: item.data.starting_bid,
       timer_duration: timerDuration,
-      started_at: new Date().toISOString(),
+      // Absolute 60s bidding deadline on the SERVER clock. Every panel counts
+      // down from this one timestamp, so admin/teams/display always agree.
+      bidding_ends_at: new Date(serverNow() + BIDDING_DURATION_SECONDS * 1000).toISOString(),
+      started_at: serverNowIso(),
     })
     .select()
     .single();
@@ -277,6 +301,11 @@ export async function placeBid(auctionId: string, teamId: string, amount: number
   if (auctionError || !auction) throw new Error('Auction not found');
   if (auction.status !== 'open') throw new Error('Auction is not open for bidding');
 
+  // Bidding window expired — no more bids (the 60s auto-close settles it).
+  if (auction.bidding_ends_at && serverNow() >= new Date(auction.bidding_ends_at).getTime()) {
+    throw new Error('Bidding time is over for this item');
+  }
+
   const item = auction.item as any;
   if (amount <= auction.current_bid) {
     throw new Error(`Bid must be higher than current bid of ${auction.current_bid}`);
@@ -317,9 +346,13 @@ export async function placeBid(auctionId: string, teamId: string, amount: number
     throw new Error(bidError.message || 'Failed to record bid');
   }
 
-  // Update auction current bid. Verify the row actually changed: RLS can
-  // silently reject (0 rows updated, no error) — e.g. when the auction closed
-  // mid-bid — and the team must not be told their bid succeeded if it didn't.
+  // Update auction current bid — guarded so only a bid ABOVE the stored
+  // current_bid can land. This closes the race where two teams bid
+  // near-simultaneously: both passed validation against the same stale
+  // current_bid and whichever update landed last used to overwrite the higher
+  // bid (root cause of "admin shows team A as winner, question went to B").
+  // RLS can also silently reject (0 rows, no error) when the auction closes
+  // mid-bid — the team must not be told the bid succeeded then either.
   const { data: updated, error: updateError } = await supabase
     .from('auctions')
     .update({
@@ -328,11 +361,28 @@ export async function placeBid(auctionId: string, teamId: string, amount: number
     })
     .eq('id', auctionId)
     .eq('status', 'open')
+    .lt('current_bid', amount)
     .select('id');
 
   if (updateError) throw new Error(`Failed to update auction: ${updateError.message}`);
   if (!updated || updated.length === 0) {
-    throw new Error('Bid no longer accepted — the auction just closed. Please stop.');
+    // Our update lost the race or the auction closed — find out which.
+    const { data: current } = await supabase
+      .from('auctions')
+      .select('status, current_bid')
+      .eq('id', auctionId)
+      .single();
+    // Withdraw the losing bid so it can never win the tie-break later.
+    await supabase
+      .from('bids')
+      .update({ is_valid: false })
+      .eq('auction_id', auctionId)
+      .eq('team_id', teamId)
+      .eq('amount', amount);
+    if (current?.status !== 'open') {
+      throw new Error('Bid no longer accepted — the auction just closed.');
+    }
+    throw new Error(`Outbid! Current bid is now ${current?.current_bid ?? amount} TC — bid higher.`);
   }
 
   return bid as Bid;
@@ -351,52 +401,32 @@ export async function getBidsForAuction(auctionId: string): Promise<Bid[]> {
 
 // ─── Auction Finalization ────────────────────────────────────────────────────
 
-export async function finalizeAuction(
-  auctionId: string,
-  winnerTeamId: string,
-  winningBid: number
-) {
-  // Deduct budget
-  const { data: team } = await supabase
-    .from('teams')
-    .select('current_budget')
-    .eq('id', winnerTeamId)
-    .single();
-
-  if (!team) throw new Error('Team not found');
-
-  const newBudget = team.current_budget - winningBid;
-
-  // Update auction
-  await supabase
-    .from('auctions')
-    .update({
-      status: 'question',
-      winning_team_id: winnerTeamId,
-      winning_bid: winningBid,
-    })
-    .eq('id', auctionId);
-
-  // Update team budget
-  await supabase
-    .from('teams')
-    .update({ current_budget: newBudget })
-    .eq('id', winnerTeamId);
-
-  // Record budget transaction
-  await supabase
-    .from('budget_transactions')
-    .insert({
-      team_id: winnerTeamId,
-      type: 'bid',
-      amount: -winningBid,
-      reason: `Winning bid for auction ${auctionId}`,
-      reference_id: auctionId,
-    });
-
-  // Update team auctions_won + reset inactivity counter
-  const { data: winTeam } = await supabase.from("teams").select("auctions_won").eq("id", winnerTeamId).single();
-  await supabase.from("teams").update({ auctions_won: (winTeam?.auctions_won ?? 0) + 1, rounds_inactive: 0 }).eq("id", winnerTeamId);
+/**
+ * Close the bidding phase and settle the round ATOMICALLY on the server.
+ *
+ * The winner is determined inside one database transaction from the bids
+ * table itself (highest bid wins; on a tie, the earlier bid wins) — never
+ * from client state, which is what used to let the admin panel and team
+ * dashboards disagree about who won. The winning bid is deducted from the
+ * winner's budget and the budget transaction recorded in the SAME
+ * transaction. Idempotent: closing an already-closed auction is a no-op.
+ *
+ * force=false → auto-close: only settles once the 60s bidding deadline passed.
+ * force=true  → admin "CLOSE BIDDING" (admin role enforced inside the RPC).
+ */
+export async function closeBidding(auctionId: string, force = false) {
+  const { data, error } = await supabase.rpc('close_bidding', {
+    p_auction_id: auctionId,
+    p_force: force,
+  });
+  if (error) throw new Error(error.message);
+  return data as {
+    ok: boolean;
+    error?: string;
+    already_closed?: boolean;
+    winning_team_id: string | null;
+    winning_bid?: number | null;
+  };
 }
 
 // ─── Question Attempts ───────────────────────────────────────────────────────
@@ -415,23 +445,48 @@ export async function recordAnswer(
     .single();
 
   const winningBid = auction?.winning_bid || 0;
-  // Correct: refund bid + 100 TC to budget. Wrong: bid stays deducted.
-  const budgetReward = result === 'correct' ? winningBid + 100 : 0;
+  // Scoring rules: correct → refund the bid + 150 TC bonus to budget.
+  // Wrong → the team simply loses the amount they bid (already deducted when
+  // they won the auction) — NO extra penalty on top.
+  const budgetReward = result === 'correct' ? winningBid + 150 : 0;
 
-  // Record the attempt
-  const { data: attempt, error } = await supabase
+  // Attach the result to the team's submitted MCQ attempt if one exists;
+  // otherwise create the attempt row. One attempt per (auction, team).
+  const { data: updatedAttempts, error: updateAttemptError } = await supabase
     .from('question_attempts')
-    .insert({
-      auction_id: auctionId,
-      team_id: teamId,
+    .update({
       result,
-      points_awarded: result === "correct" ? 1 : 0,
+      points_awarded: result === 'correct' ? 1 : 0,
       admin_id: adminId,
+      answered_at: serverNowIso(),
     })
-    .select()
-    .single();
+    .eq('auction_id', auctionId)
+    .eq('team_id', teamId)
+    .select();
 
-  if (error) throw error;
+  let attempt: QuestionAttempt | null = null;
+
+  if (updateAttemptError) throw updateAttemptError;
+
+  if (updatedAttempts && updatedAttempts.length > 0) {
+    attempt = updatedAttempts[0] as QuestionAttempt;
+  } else {
+    const inserted = await supabase
+      .from('question_attempts')
+      .insert({
+        auction_id: auctionId,
+        team_id: teamId,
+        result,
+        points_awarded: result === 'correct' ? 1 : 0,
+        admin_id: adminId,
+      })
+      .select()
+      .single();
+    if (inserted.error) throw inserted.error;
+    attempt = inserted.data as QuestionAttempt;
+  }
+
+  if (!attempt) throw new Error('Failed to record the answer');
 
   // Update team: score + budget
   const { data: team } = await supabase
@@ -474,7 +529,7 @@ export async function recordAnswer(
         team_id: teamId,
         type: 'refund',
         amount: budgetReward,
-        reason: `Correct answer — bid refund + 100 TC bonus for auction ${auctionId}`,
+        reason: `Correct answer — bid refund + 150 TC bonus for auction ${auctionId}`,
         reference_id: auctionId,
       });
   }
@@ -491,10 +546,73 @@ export async function recordAnswer(
   return attempt as QuestionAttempt;
 }
 
+// ─── MCQ Answer Submission (team side) ───────────────────────────────────────
+
+/**
+ * Team picks an MCQ option during the question phase. Stored as a pending
+ * attempt; the quizmaster still grades it (MARK CORRECT / MARK WRONG).
+ */
+export async function submitTeamAnswer(
+  auctionId: string,
+  teamId: string,
+  selectedAnswer: string
+): Promise<QuestionAttempt> {
+  // Only while the question phase is live — no changing picks after grading.
+  const { data: auction } = await supabase
+    .from('auctions')
+    .select('status, winning_team_id')
+    .eq('id', auctionId)
+    .single();
+
+  if (!auction || auction.status !== 'question') {
+    throw new Error('The question phase is not active');
+  }
+  if (auction.winning_team_id !== teamId) {
+    throw new Error('Only the winning team can answer this question');
+  }
+
+  const { data: existing } = await supabase
+    .from('question_attempts')
+    .select('result')
+    .eq('auction_id', auctionId)
+    .eq('team_id', teamId)
+    .single();
+
+  if (existing?.result) throw new Error('Your answer has already been graded');
+
+  const { data, error } = await supabase
+    .from('question_attempts')
+    .upsert(
+      {
+        auction_id: auctionId,
+        team_id: teamId,
+        selected_answer: selectedAnswer,
+        result: null,
+        points_awarded: 0,
+      },
+      { onConflict: 'auction_id,team_id' }
+    )
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as QuestionAttempt;
+}
+
+export async function getAttemptsForAuction(auctionId: string): Promise<QuestionAttempt[]> {
+  const { data, error } = await supabase
+    .from('question_attempts')
+    .select('*')
+    .eq('auction_id', auctionId);
+
+  if (error) throw error;
+  return (data || []) as QuestionAttempt[];
+}
+
 // ─── Inactive Team Penalties ─────────────────────────────────────────────────
 
 const INACTIVE_ROUNDS_THRESHOLD = 3;
-const INACTIVE_PENALTY_TC = 100;
+const INACTIVE_PENALTY_TC = 150;
 
 export async function checkAndApplyInactivePenalties(
   completedAuctionId: string
