@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
-import { ConnectionStatus } from '../ui';
+import { ConnectionStatus, Logo } from '../ui';
 import {
   LayoutDashboard, Users, Gavel, BarChart3,
   FileText, Settings, LogOut, Zap
@@ -30,7 +30,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         <div className="p-6 border-b border-dark-400">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center">
-              <Zap className="text-cyan-400" size={20} />
+              <Logo size={20} />
             </div>
             <div>
               <h1 className="text-sm font-bold text-slate-900 tracking-wider">TECH AUCTION</h1>

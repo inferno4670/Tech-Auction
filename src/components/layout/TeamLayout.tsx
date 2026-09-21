@@ -1,8 +1,8 @@
 import { type ReactNode } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { useTeamPresence } from '../../hooks/useRealtime';
-import { ConnectionStatus, Badge } from '../ui';
-import { Zap, LogOut } from 'lucide-react';
+import { ConnectionStatus, Badge, Logo } from '../ui';
+import { LogOut } from 'lucide-react';
 
 export default function TeamLayout({ children }: { children: ReactNode }) {
   const { team, signOut } = useAuth();
@@ -15,7 +15,7 @@ export default function TeamLayout({ children }: { children: ReactNode }) {
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center">
-              <Zap className="text-cyan-400" size={16} />
+              <Logo size={16} />
             </div>
             <div>
               <h1 className="text-xs font-bold text-slate-900 tracking-widest">TECH AUCTION</h1>

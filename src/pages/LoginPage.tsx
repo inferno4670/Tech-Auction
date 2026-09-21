@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { Zap, ArrowLeft, Loader2, Shield, Users } from 'lucide-react';
+import { ArrowLeft, Loader2, Shield, Users } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { Logo } from '../components/ui';
 
 type LoginMode = 'select' | 'admin' | 'team';
 
@@ -58,7 +59,7 @@ export default function LoginPage() {
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 mb-4">
-            <Zap className="text-cyan-400" size={32} />
+            <Logo size={32} />
           </div>
           <h1 className="text-3xl font-bold text-white tracking-wider">TECH AUCTION</h1>
           <p className="text-sm text-slate-500 font-mono mt-1">COMPETITION LOGIN</p>

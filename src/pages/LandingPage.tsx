@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
-import { Zap, Shield, Users, Monitor, AlertTriangle } from 'lucide-react';
+import { Shield, Users, Monitor, AlertTriangle } from 'lucide-react';
 import { isConfigured } from '../lib/supabase';
+import { Logo } from '../components/ui';
 
 export default function LandingPage() {
   const navigate = useNavigate();
@@ -17,7 +18,7 @@ export default function LandingPage() {
       <div className="relative z-10 text-center px-6 animate-fade-in">
         {/* Logo */}
         <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 mb-8 animate-float">
-          <Zap className="text-cyan-400" size={40} />
+          <Logo size={40} />
         </div>
 
         {/* Title */}

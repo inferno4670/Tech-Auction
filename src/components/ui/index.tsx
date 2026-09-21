@@ -3,6 +3,8 @@ import { cn } from '../../lib/utils';
 import { AnimatedNumber } from './AnimatedNumber';
 import { X, Loader2, Wifi, WifiOff, AlertTriangle } from 'lucide-react';
 
+export { Logo } from './Logo';
+
 // ─── Connection Status ───────────────────────────────────────────────────────
 
 type ConnectionStatusType = 'live' | 'reconnecting' | 'offline';

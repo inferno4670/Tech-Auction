@@ -3,13 +3,13 @@ import {
   getRankings, getCurrentAuction, getEventSettings, getBidsForAuction, closeBidding
 } from '../../lib/queries';
 import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
-import { Badge } from '../../components/ui';
+import { Badge, Logo } from '../../components/ui';
 import { AnimatedNumber } from '../../components/ui/AnimatedNumber';
 import { formatTime } from '../../lib/utils';
 import { syncServerTime, serverNow, remainingSeconds } from '../../lib/serverTime';
 import type { TeamWithRank, AuctionWithItem, EventSettings, Bid } from '../../types';
 import { MCQ_KEYS } from '../../types';
-import { Zap, Trophy, Clock, Gavel } from 'lucide-react';
+import { Trophy, Clock, Gavel } from 'lucide-react';
 
 export default function DisplayPage() {
   const [rankings, setRankings] = useState<TeamWithRank[]>([]);
@@ -113,7 +113,7 @@ export default function DisplayPage() {
     return (
       <div className="min-h-screen bg-dark-900 grid-bg flex items-center justify-center">
         <div className="text-center">
-          <Zap className="mx-auto text-cyan-400 animate-pulse-glow" size={48} />
+          <Logo className="mx-auto animate-pulse-glow" size={48} />
           <p className="text-slate-500 font-mono mt-4">LOADING DISPLAY...</p>
         </div>
       </div>
@@ -134,11 +134,11 @@ export default function DisplayPage() {
         {/* Header */}
         <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-3 mb-2">
-            <Zap className="text-cyan-400" size={32} />
+            <Logo size={32} />
             <h1 className="text-5xl font-black text-slate-900 tracking-tighter">
               TECH <span className="text-cyan-400 text-glow-cyan">AUCTION</span>
             </h1>
-            <Zap className="text-cyan-400" size={32} />
+            <Logo size={32} />
           </div>
           <div className="w-48 h-0.5 bg-gradient-to-r from-transparent via-cyan-500 to-transparent mx-auto" />
           <p className="text-sm text-slate-500 font-mono mt-3 tracking-widest">
