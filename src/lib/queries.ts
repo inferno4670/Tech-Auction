@@ -431,172 +431,86 @@ export async function closeBidding(auctionId: string, force = false) {
 
 // ─── Question Attempts ───────────────────────────────────────────────────────
 
+/**
+ * Admin grades the round (MARK CORRECT / MARK WRONG). The whole settlement —
+ * attempt row, score, budget refund/bonus, counters, inactivity ticks, auction
+ * completed — happens atomically inside the grade_answer() RPC; the admin role
+ * is enforced server-side. This is the override path: the team's own pick is
+ * usually already auto-verified by submitTeamAnswer, in which case the RPC
+ * reports already_graded and this resolves to null.
+ */
 export async function recordAnswer(
   auctionId: string,
-  teamId: string,
-  result: 'correct' | 'wrong',
-  adminId: string
-): Promise<QuestionAttempt> {
-  // Get the auction to know the winning bid for refund logic
-  const { data: auction } = await supabase
-    .from('auctions')
-    .select('winning_bid')
-    .eq('id', auctionId)
-    .single();
+  result: 'correct' | 'wrong'
+): Promise<QuestionAttempt | null> {
+  const { data, error } = await supabase.rpc('grade_answer', {
+    p_auction_id: auctionId,
+    p_result: result,
+  });
+  if (error) throw new Error(error.message);
 
-  const winningBid = auction?.winning_bid || 0;
-  // Scoring rules: correct → refund the bid + 150 TC bonus to budget.
-  // Wrong → the team simply loses the amount they bid (already deducted when
-  // they won the auction) — NO extra penalty on top.
-  const budgetReward = result === 'correct' ? winningBid + 150 : 0;
-
-  // Attach the result to the team's submitted MCQ attempt if one exists;
-  // otherwise create the attempt row. One attempt per (auction, team).
-  const { data: updatedAttempts, error: updateAttemptError } = await supabase
-    .from('question_attempts')
-    .update({
-      result,
-      points_awarded: result === 'correct' ? 1 : 0,
-      admin_id: adminId,
-      answered_at: serverNowIso(),
-    })
-    .eq('auction_id', auctionId)
-    .eq('team_id', teamId)
-    .select();
-
-  let attempt: QuestionAttempt | null = null;
-
-  if (updateAttemptError) throw updateAttemptError;
-
-  if (updatedAttempts && updatedAttempts.length > 0) {
-    attempt = updatedAttempts[0] as QuestionAttempt;
-  } else {
-    const inserted = await supabase
-      .from('question_attempts')
-      .insert({
-        auction_id: auctionId,
-        team_id: teamId,
-        result,
-        points_awarded: result === 'correct' ? 1 : 0,
-        admin_id: adminId,
-      })
-      .select()
-      .single();
-    if (inserted.error) throw inserted.error;
-    attempt = inserted.data as QuestionAttempt;
+  const res = data as { ok: boolean; error?: string; already_graded?: boolean };
+  if (!res?.ok) {
+    if (res?.error === 'not_allowed') throw new Error('Only admins can grade answers');
+    if (res?.error === 'already_graded') return null;
+    throw new Error(res?.error || 'Failed to record the answer');
   }
 
-  if (!attempt) throw new Error('Failed to record the answer');
-
-  // Update team: score + budget
-  const { data: team } = await supabase
-    .from('teams')
-    .select('score, correct_answers, wrong_answers, current_budget')
-    .eq('id', teamId)
-    .single();
-
-  if (team) {
-    const updates: any = {};
-    if (result === 'correct') {
-      updates.correct_answers = team.correct_answers + 1;
-      updates.current_budget = team.current_budget + budgetReward;
-      updates.score = team.score + 1;
-    } else {
-      updates.wrong_answers = team.wrong_answers + 1;
-    }
-    await supabase.from('teams').update(updates).eq('id', teamId);
-  }
-
-  // Record score transaction for correct answer
-  if (result === 'correct') {
-    await supabase
-      .from('score_transactions')
-      .insert({
-        team_id: teamId,
-        type: 'reward',
-        amount: 1,
-        reason: 'Correct answer',
-        reference_id: auctionId,
-        admin_id: adminId,
-      });
-  }
-
-  // Record budget transaction on correct answer
-  if (budgetReward > 0) {
-    await supabase
-      .from('budget_transactions')
-      .insert({
-        team_id: teamId,
-        type: 'refund',
-        amount: budgetReward,
-        reason: `Correct answer — bid refund + 150 TC bonus for auction ${auctionId}`,
-        reference_id: auctionId,
-      });
-  }
-
-  // Mark auction as completed
-  await supabase
-    .from('auctions')
-    .update({ status: 'completed' })
-    .eq('id', auctionId);
-
-  // Check and apply inactive team penalties after each auction
-  await checkAndApplyInactivePenalties(auctionId);
-
-  return attempt as QuestionAttempt;
+  // Return the settled attempt (if the row exists) so callers can refresh UI.
+  const attempts = await getAttemptsForAuction(auctionId);
+  return attempts[0] ?? null;
 }
 
 // ─── MCQ Answer Submission (team side) ───────────────────────────────────────
 
+export interface SubmitAnswerResult {
+  /** true when the item had an answer key and the RPC settled the round */
+  graded: boolean;
+  result: 'correct' | 'wrong' | null;
+  /** TC returned to the winner on a correct pick (bid refund + 150 bonus) */
+  reward: number;
+  /** TC lost on a wrong pick (the winning bid) */
+  bidLost: number;
+}
+
 /**
- * Team picks an MCQ option during the question phase. Stored as a pending
- * attempt; the quizmaster still grades it (MARK CORRECT / MARK WRONG).
+ * Team picks an MCQ option during the question phase. The submit_team_answer()
+ * RPC stores the pick and — when the item carries a correct_answer — verifies
+ * it SERVER-SIDE and settles the round atomically (refund/bonus or lost bid,
+ * counters, score, inactivity ticks, auction completed). Items without a key
+ * stay on the quizmaster's manual grading path.
  */
 export async function submitTeamAnswer(
   auctionId: string,
-  teamId: string,
   selectedAnswer: string
-): Promise<QuestionAttempt> {
-  // Only while the question phase is live — no changing picks after grading.
-  const { data: auction } = await supabase
-    .from('auctions')
-    .select('status, winning_team_id')
-    .eq('id', auctionId)
-    .single();
+): Promise<SubmitAnswerResult> {
+  const { data, error } = await supabase.rpc('submit_team_answer', {
+    p_auction_id: auctionId,
+    p_selected: selectedAnswer,
+  });
+  if (error) throw new Error(error.message);
 
-  if (!auction || auction.status !== 'question') {
-    throw new Error('The question phase is not active');
+  const res = data as {
+    ok: boolean; error?: string; graded?: boolean;
+    result?: 'correct' | 'wrong'; reward?: number; bid_lost?: number;
+  };
+  if (!res?.ok) {
+    const messages: Record<string, string> = {
+      auction_not_found: 'Auction not found',
+      not_in_question_phase: 'The question phase is not active',
+      not_a_team_member: 'Your account is not linked to a team',
+      only_winner_can_answer: 'Only the winning team can answer this question',
+      already_graded: 'Your answer has already been graded',
+    };
+    throw new Error((res.error && messages[res.error]) || 'Failed to submit answer');
   }
-  if (auction.winning_team_id !== teamId) {
-    throw new Error('Only the winning team can answer this question');
-  }
 
-  const { data: existing } = await supabase
-    .from('question_attempts')
-    .select('result')
-    .eq('auction_id', auctionId)
-    .eq('team_id', teamId)
-    .single();
-
-  if (existing?.result) throw new Error('Your answer has already been graded');
-
-  const { data, error } = await supabase
-    .from('question_attempts')
-    .upsert(
-      {
-        auction_id: auctionId,
-        team_id: teamId,
-        selected_answer: selectedAnswer,
-        result: null,
-        points_awarded: 0,
-      },
-      { onConflict: 'auction_id,team_id' }
-    )
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data as QuestionAttempt;
+  return {
+    graded: res.graded ?? false,
+    result: res.result ?? null,
+    reward: res.reward ?? 0,
+    bidLost: res.bid_lost ?? 0,
+  };
 }
 
 export async function getAttemptsForAuction(auctionId: string): Promise<QuestionAttempt[]> {
@@ -609,64 +523,6 @@ export async function getAttemptsForAuction(auctionId: string): Promise<Question
   return (data || []) as QuestionAttempt[];
 }
 
-// ─── Inactive Team Penalties ─────────────────────────────────────────────────
-
-const INACTIVE_ROUNDS_THRESHOLD = 3;
-const INACTIVE_PENALTY_TC = 150;
-
-export async function checkAndApplyInactivePenalties(
-  completedAuctionId: string
-): Promise<void> {
-  // 1. Get the winning team of this auction
-  const { data: completedAuction } = await supabase
-    .from('auctions')
-    .select('winning_team_id')
-    .eq('id', completedAuctionId)
-    .single();
-
-  const winnerId = completedAuction?.winning_team_id;
-
-  // 2. Get all active teams
-  const { data: allTeams } = await supabase
-    .from('teams')
-    .select('id, rounds_inactive, current_budget')
-    .eq('is_active', true);
-
-  if (!allTeams || allTeams.length === 0) return;
-
-  // 3. Winner resets counter; everyone else increments
-  for (const team of allTeams) {
-    if (team.id === winnerId) {
-      await supabase
-        .from('teams')
-        .update({ rounds_inactive: 0 })
-        .eq('id', team.id);
-    } else {
-      const newCount = team.rounds_inactive + 1;
-      const updates: any = { rounds_inactive: newCount };
-
-      if (newCount >= INACTIVE_ROUNDS_THRESHOLD) {
-        updates.current_budget = Math.max(0, team.current_budget - INACTIVE_PENALTY_TC);
-        updates.rounds_inactive = 0;
-
-        await supabase
-          .from('budget_transactions')
-          .insert({
-            team_id: team.id,
-            type: 'manual_adjustment',
-            amount: -INACTIVE_PENALTY_TC,
-            reason: "Inactivity penalty - " + INACTIVE_ROUNDS_THRESHOLD + " rounds without winning",
-            reference_id: completedAuctionId,
-          });
-      }
-
-      await supabase
-        .from('teams')
-        .update(updates)
-        .eq('id', team.id);
-    }
-  }
-}
 // ─── Bonus / Penalty ─────────────────────────────────────────────────────────
 
 export async function applyBonus(

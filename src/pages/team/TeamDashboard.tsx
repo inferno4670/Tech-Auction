@@ -3,7 +3,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { getTeamForUser } from '../../lib/auth';
 import {
   getRankings, getCurrentAuction, getEventSettings, placeBid, getBidsForAuction,
-  submitTeamAnswer, getAttemptsForAuction, closeBidding
+  submitTeamAnswer, getAttemptsForAuction, closeBidding, type SubmitAnswerResult
 } from '../../lib/queries';
 import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
 import { StatCard, Badge, LoadingSpinner } from '../../components/ui';
@@ -41,6 +41,11 @@ export default function TeamDashboard() {
   const [myAttempt, setMyAttempt] = useState<QuestionAttempt | null>(null);
   const [answerLoading, setAnswerLoading] = useState(false);
   const [answerError, setAnswerError] = useState('');
+  // Instant server verdict for the team's MCQ pick (survives the panel swap
+  // while the auction flips to 'completed').
+  const [answerOutcome, setAnswerOutcome] = useState<
+    (SubmitAnswerResult & { correctAnswer: string | null }) | null
+  >(null);
 
   const mountedRef = useRef(true);
   const loadIdRef = useRef(0); // prevents stale responses from overwriting fresh data
@@ -102,6 +107,9 @@ export default function TeamDashboard() {
   }, [user]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // A new auction clears the previous question's instant verdict.
+  useEffect(() => { setAnswerOutcome(null); }, [auction?.id]);
 
   // Realtime
   useAuctionRealtime(() => { if (mountedRef.current) loadData(); });
@@ -275,15 +283,27 @@ export default function TeamDashboard() {
     }
   };
 
-  // Winning team picks an MCQ option — stored as a pending attempt that the
-  // quizmaster then grades (MARK CORRECT / MARK WRONG).
+  // Winning team picks an MCQ option — the submit_team_answer() RPC verifies
+  // the pick against the item's answer key SERVER-SIDE and settles the round
+  // atomically (refund + bonus, or lost bid). Items without a key fall back to
+  // quizmaster grading.
   const handleSelectAnswer = async (answer: string) => {
     if (!auction || !team) return;
     setAnswerError('');
     setAnswerLoading(true);
     try {
-      const attempt = await submitTeamAnswer(auction.id, team.id, answer);
-      setMyAttempt(attempt);
+      const outcome = await submitTeamAnswer(auction.id, answer);
+      setAnswerOutcome({
+        ...outcome,
+        // Captured now: once the round completes, the payload no longer
+        // includes the item (getCurrentAuction excludes completed rounds).
+        correctAnswer: outcome.graded && outcome.result === 'wrong'
+          ? (auction.item?.correct_answer ?? null)
+          : null,
+      });
+      setMyAttempt(prev => prev
+        ? { ...prev, selected_answer: answer, result: outcome.result }
+        : prev);
     } catch (err: any) {
       setAnswerError(err.message || 'Failed to submit answer');
     } finally {
@@ -305,6 +325,37 @@ export default function TeamDashboard() {
           {stateMessage}
         </p>
       </div>
+
+      {/* Instant verdict from the auto-verified MCQ (top-level so it stays
+          visible after the round settles and the question card unmounts) */}
+      {answerOutcome?.graded && (
+        answerOutcome.result === 'wrong' ? (
+          <div className="p-5 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-3 animate-slide-up">
+            <XCircle className="text-red-400 shrink-0" size={26} />
+            <div className="text-left">
+              <p className="text-red-400 font-bold text-lg">WRONG ANSWER</p>
+              <p className="text-sm font-mono text-red-400/80 mt-0.5">
+                −{answerOutcome.bidLost} TC — your bid is lost
+              </p>
+              {answerOutcome.correctAnswer && (
+                <p className="text-xs text-slate-500 font-mono mt-2">
+                  Correct answer: {answerOutcome.correctAnswer}
+                </p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="p-5 rounded-xl bg-green-500/10 border border-green-500/30 flex items-start gap-3 animate-slide-up">
+            <CheckCircle className="text-green-400 shrink-0" size={26} />
+            <div className="text-left">
+              <p className="text-green-400 font-bold text-lg">CORRECT! 🎉</p>
+              <p className="text-sm font-mono text-green-400/80 mt-0.5">
+                +{answerOutcome.reward} TC — bid refunded + 150 TC bonus
+              </p>
+            </div>
+          </div>
+        )
+      )}
 
       {/* Stats Row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -483,22 +534,30 @@ export default function TeamDashboard() {
                   {questionOptions.map((opt, i) => {
                     const key = MCQ_KEYS[i];
                     const picked = myAttempt?.selected_answer === opt;
+                    const graded = answerOutcome?.graded ? answerOutcome.result : myAttempt?.result ?? null;
+                    const pickedCorrect = picked && graded === 'correct';
+                    const pickedWrong = picked && graded === 'wrong';
                     return (
                       <button key={key}
                         onClick={() => handleSelectAnswer(opt)}
                         disabled={!!myAttempt?.selected_answer || answerLoading}
                         className={`w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-all ${
-                          picked
-                            ? 'bg-violet-500/15 border-violet-500/50'
-                            : 'bg-dark-700 border-dark-400 hover:border-violet-500/40 disabled:opacity-60'
+                          pickedCorrect ? 'bg-green-500/15 border-green-500/50' :
+                          pickedWrong ? 'bg-red-500/15 border-red-500/50' :
+                          picked ? 'bg-violet-500/15 border-violet-500/50' :
+                          'bg-dark-700 border-dark-400 hover:border-violet-500/40 disabled:opacity-60'
                         }`}>
                         <span className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center font-mono font-bold text-sm ${
+                          pickedCorrect ? 'bg-green-500 text-white' :
+                          pickedWrong ? 'bg-red-500 text-white' :
                           picked ? 'bg-violet-500 text-white' : 'bg-dark-600 text-slate-500'
                         }`}>
                           {key}
                         </span>
                         <span className="flex-1 font-medium text-slate-900">{opt}</span>
-                        {picked && <CheckCircle className="text-violet-500" size={18} />}
+                        {pickedCorrect && <CheckCircle className="text-green-400" size={18} />}
+                        {pickedWrong && <XCircle className="text-red-400" size={18} />}
+                        {picked && !graded && <CheckCircle className="text-violet-500" size={18} />}
                       </button>
                     );
                   })}
@@ -508,7 +567,9 @@ export default function TeamDashboard() {
               {answerError && (
                 <p className="text-red-400 text-sm font-mono mt-2">{answerError}</p>
               )}
-              {myAttempt?.selected_answer && (
+
+              {/* Manual-grading fallback (item has no answer key) */}
+              {myAttempt?.selected_answer && !answerOutcome?.graded && !myAttempt.result && (
                 <p className="text-sm font-mono text-violet-400 mt-3 flex items-center gap-2">
                   <CheckCircle size={14} />
                   Answer submitted — waiting for the quizmaster.

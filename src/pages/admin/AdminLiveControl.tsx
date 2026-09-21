@@ -207,12 +207,16 @@ export default function AdminLiveControl() {
   };
 
   const handleMarkAnswer = async (result: 'correct' | 'wrong') => {
-    if (!auction || !auction.winning_team_id || !user) return;
+    if (!auction || !auction.winning_team_id) return;
     setProcessing(true);
     try {
-      await recordAnswer(auction.id, auction.winning_team_id, result, user.id);
+      // Atomic settlement inside the grade_answer() RPC (admin role enforced
+      // server-side). Null = the team's pick was already auto-verified — the
+      // round is settled and there is nothing left to override.
+      const settled = await recordAnswer(auction.id, result);
       await logEvent(`answer_${result}`, 'auction', auction.id, {
-        team_id: auction.winning_team_id, result
+        team_id: auction.winning_team_id, result,
+        auto_verified: settled === null,
       });
       await updateAuction(auction.id, { timer_started_at: null, timer_paused: false });
       await loadData();
@@ -558,11 +562,27 @@ export default function AdminLiveControl() {
                   })}
                 </div>
               )}
-              {winningAttempt?.selected_answer && (
+              {winningAttempt?.result ? (
+                /* Auto-verified (or previously graded) — settled, read-only */
+                <div className={`mb-4 p-4 rounded-xl border flex items-center gap-3 ${
+                  winningAttempt.result === 'correct'
+                    ? 'bg-green-500/10 border-green-500/30'
+                    : 'bg-red-500/10 border-red-500/30'
+                }`}>
+                  {winningAttempt.result === 'correct'
+                    ? <CheckCircle className="text-green-400" size={20} />
+                    : <XCircle className="text-red-400" size={20} />}
+                  <p className={`font-bold ${
+                    winningAttempt.result === 'correct' ? 'text-green-400' : 'text-red-400'
+                  }`}>
+                    AUTO-VERIFIED {winningAttempt.result.toUpperCase()} — round settled against the item's answer key
+                  </p>
+                </div>
+              ) : winningAttempt?.selected_answer ? (
                 <p className="text-sm font-mono text-violet-400 mb-4">
                   Answer submitted — waiting for your grading.
                 </p>
-              )}
+              ) : null}
 
               <div className="bg-dark-700 rounded-xl p-4 border border-amber-500/20">
                 <p className="text-xs font-mono text-amber-600 mb-1">CORRECT ANSWER (Admin Only)</p>

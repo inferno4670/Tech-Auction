@@ -48,10 +48,10 @@ else's scoreboard.
 flowchart LR
     A[⚒ Admin opens<br/>an auction] --> B[💸 Teams bid in a<br/>60s countdown]
     B -->|deadline hits| C[⚖️ Atomic settlement<br/>close_bidding RPC]
-    C -->|highest bid wins<br/>ties → earliest| D[❓ Winner answers<br/>the MCQ]
+    C -->|highest bid wins<br/>ties → earliest| D[❓ Winner picks the MCQ<br/>auto-verified vs answer key]
     C -->|no bids| H[📦 Item closed,<br/>skipped]
-    D --> E[✅ Correct<br/>refund + 150 TC]
-    D --> F[❌ Wrong<br/>bid lost]
+    D --> E[✅ Correct<br/>refund + 150 TC — instant]
+    D --> F[❌ Wrong<br/>bid lost — instant]
     E --> G[🔄 Inactivity penalties<br/>applied, next item]
     F --> G
     H --> G
@@ -73,7 +73,7 @@ flowchart LR
 | | **🛡 Admin Control Room** | **👥 Team Dashboard** | **📺 Projector Display** |
 |---|---|---|---|
 | Route | `/admin` (auth) | `/team` (auth) | `/display` (public) |
-| Powers | Start/close auctions, question timer, grade answers, bonuses, TC adjustments, item editor with MCQ builder, audit logs, CSV export, demo reset | Quick-bid chips + custom bids, live bid feed, MCQ picker, budget & rank stats | Giant bid counter, bid feed, leaderboard, countdowns for the whole hall |
+| Powers | Start/close auctions, question timer, grade answers (override only — MCQs auto-verify), bonuses, TC adjustments, item editor with MCQ builder, audit logs, CSV export, demo reset | Quick-bid chips + custom bids, live bid feed, MCQ picker with **instant verdict**, budget & rank stats | Giant bid counter, bid feed, leaderboard, countdowns for the whole hall |
 | Sees | Everything, including the answer key | Item, bids, own attempt | Item, bids, MCQ options — no answers |
 
 Every screen ticks from the **same clock** and settles from the **same transaction**.
@@ -131,10 +131,23 @@ higher bid can land — a loser's update matches zero rows, the bid is withdrawn
 </details>
 
 <details>
+<summary><b>🎓 Problem 4: the quizmaster becomes a grading bottleneck</b></summary>
+
+Hand-grading every MCQ stalls the show between rounds. **Fix:** when the winning
+team taps an option, a `submit_team_answer()` RPC compares it against the item's
+`correct_answer` **inside the database** and settles the whole round atomically —
+attempt row, budget refund + 150 TC bonus (or lost bid), counters, score,
+inactivity ticks, auction completed. The team sees its verdict instantly; the
+admin panel flips to a read-only AUTO-VERIFIED banner. Items without an answer
+key (or the quizmaster's judgment call) still go through the `grade_answer()`
+override, and a graded round can never be re-graded.
+</details>
+
+<details>
 <summary><b>🔐 Security posture</b></summary>
 
-- **Row Level Security on every table** — teams read/write only their own rows, admins via role policies
-- **Anon read policies scoped to the projector route** (`/display` runs logged-out) — public data only: live auction, bids, items, settings
+- **Row Level Security on every table** — writes are strictly own-row / admin-only; reads are scoped per surface: teams and the public projector read the leaderboard columns (scores, budgets — public by design, they're on the big screen), everything private stays behind auth
+- **Anon read policies scoped to the projector route** (`/display` runs logged-out) — public data only: live auction, bids, items, settings, leaderboard
 - **Winner settlement and admin checks enforced inside the database**, not the client (`close_bidding` verifies the caller's admin role server-side)
 - **Supabase anon key only** in the frontend — no service-role secrets in the browser
 - Honest footnote: the current auction payload embeds the full item row, so the answer key *is* technically reachable by a determined team with devtools — flagged for a sanitized view/RPC before showtime
@@ -166,6 +179,7 @@ npm install
    database/migrations/008_mcq_bidding_timer_and_scoring.sql   # MCQ + 60s timer + atomic settlement
    database/migrations/009_pin_get_server_time_search_path.sql
    database/migrations/010_anon_read_for_display_route.sql     # public projector reads
+   database/migrations/011_leaderboard_ranks_and_auto_verified_mcq.sql  # true ranks + self-grading MCQs
    ```
 
    All migrations are idempotent — safe to re-run.
@@ -198,13 +212,14 @@ and watch the countdowns tick in perfect lock-step.
 
 ```text
 src/
+├── assets/           # 🎨 Drop logo.svg / logo.png here to rebrand every screen
 ├── pages/
 │   ├── admin/        # Dashboard · Teams · Auctions · Live Control · Leaderboard · Logs · Settings
 │   ├── team/         # TeamDashboard — bidding + MCQ answering
 │   └── display/      # DisplayPage — the hall's projector view
 ├── components/
 │   ├── layout/       # AdminLayout, TeamLayout
-│   ├── ui/           # Modals, badges, animated numbers, spinners
+│   ├── ui/           # Logo, modals, badges, animated numbers, spinners
 │   └── ...
 ├── hooks/
 │   ├── useAuth.tsx   # Auth context
@@ -230,6 +245,24 @@ database/
 | `npm run build` | Type-check (`tsc -b`) + production bundle |
 | `npm run lint` | oxlint over the codebase |
 | `npm run preview` | Serve the production build locally |
+
+## 🎨 Your logo on every screen
+
+That bolt on the landing page, login, admin sidebar, team header and the projector?
+It's **one replaceable asset** — not hard-coded artwork. Rebranding the whole arena
+takes exactly one file:
+
+```text
+src/assets/logo.png     ← drop this in, rebuild, done
+```
+
+- **Accepted names:** `logo.svg` · `logo.png` · `logo.webp` · `logo.jpg` · `logo.jpeg` · `logo.gif` · `logo.avif`
+- **Priority if several exist:** svg → png → webp → jpg → jpeg → gif → avif
+- **Zero code changes** — a `<Logo>` component resolves the file at build time and every screen picks it up automatically
+- **Reversible:** delete the file and the default bolt returns
+- **Tip:** an SVG, or a square PNG (512×512+) with transparent background, stays crisp from a 16 px sidebar chip to the hall's projector
+
+> The browser-tab icon is separate: swap `public/favicon.svg` to match your mark.
 
 ## ☁️ Deploy
 
