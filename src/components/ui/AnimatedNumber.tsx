@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
 import { cn } from '../../lib/utils';
 
 interface AnimatedNumberProps {
@@ -59,10 +59,16 @@ function DigitReel({
     let ribbon = ribbonRef.current;
     let needsRebuild = false;
 
-    // Check if current ribbon has the right prev digit at the top
+    // Check if current ribbon matches the expected prev digit AND height —
+    // a digitHeight change (responsive font resize) invalidates row geometry.
     if (ribbon) {
-      const firstRow = ribbon.firstElementChild;
-      if (firstRow && firstRow.textContent !== String(prev)) {
+      const firstRow = ribbon.firstElementChild as HTMLElement | null;
+      const rowHeight = firstRow ? parseFloat(firstRow.style.height) : NaN;
+      if (
+        !firstRow ||
+        firstRow.textContent !== String(prev) ||
+        Math.abs(rowHeight - digitHeight) > 0.5
+      ) {
         needsRebuild = true;
       }
     }
@@ -259,10 +265,33 @@ export function AnimatedNumber({
   prefix = '',
   suffix = '',
 }: AnimatedNumberProps) {
-  const isLarge = className?.includes('text-4xl') || className?.includes('text-5xl') || className?.includes('text-6xl') || className?.includes('text-7xl');
-  const isMedium = className?.includes('text-2xl') || className?.includes('text-3xl');
+  const spanRef = useRef<HTMLSpanElement>(null);
+  const [digitHeight, setDigitHeight] = useState(36);
 
-  const digitHeight = isLarge ? 72 : isMedium ? 52 : 36;
+  // Measure the REAL rendered font size instead of sniffing class names.
+  // Class sniffing broke twice: the projector wraps <AnimatedNumber> in a
+  // text-7xl div (the component itself gets no className → 36px reels under
+  // 72px glyphs → digits cropped in half), and .stat-value is responsive
+  // (36px → 48px at md) which no static guess can track. The reel has
+  // overflow:hidden, so its height MUST cover the actual em box.
+  useLayoutEffect(() => {
+    const el = spanRef.current;
+    if (!el) return;
+
+    const measure = () => {
+      const fontSize = parseFloat(getComputedStyle(el).fontSize);
+      if (Number.isFinite(fontSize) && fontSize > 0) {
+        // 5% headroom over the em box for rounding/antialiasing
+        setDigitHeight(Math.ceil(fontSize * 1.05));
+      }
+    };
+
+    measure();
+    // Fires on responsive size changes (md: breakpoints) and font loading.
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const formatted = useMemo(() => formatWithCommas(value), [value]);
   const tokens = useMemo(() => parseToTokens(formatted), [formatted]);
@@ -285,6 +314,7 @@ export function AnimatedNumber({
 
   return (
     <span
+      ref={spanRef}
       className={cn(
         'inline-flex items-center font-mono tabular-nums',
         className,
