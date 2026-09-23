@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 
 // ─── Server-Clock Sync ────────────────────────────────────────────────────────
 //
-// Every countdown (bidding 60s window, question timer) is derived from an
+// Every countdown (bidding window, question timer) is derived from an
 // absolute timestamp stored in the DATABASE, evaluated against the SERVER
 // clock. Each client measures its own offset vs the server once via the
 // get_server_time() RPC (migration 008) — so admin, team dashboards and the

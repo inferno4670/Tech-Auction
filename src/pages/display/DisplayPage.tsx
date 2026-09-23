@@ -7,10 +7,10 @@ import { useAutoCloseBidding } from '../../hooks/useAutoCloseBidding';
 import { useRoundResults } from '../../hooks/useRoundResults';
 import { Badge, Logo, RoundResultStrip, RoundResultOverlay } from '../../components/ui';
 import { AnimatedNumber } from '../../components/ui/AnimatedNumber';
-import { formatTime } from '../../lib/utils';
+import { formatTime, cn, podiumRowClass, podiumRankClass, podiumLabel } from '../../lib/utils';
 import { syncServerTime, serverNow, remainingSeconds } from '../../lib/serverTime';
 import type { TeamWithRank, AuctionWithItem, EventSettings, Bid } from '../../types';
-import { MCQ_KEYS } from '../../types';
+import { MCQ_KEYS, TOP_QUALIFY_COUNT } from '../../types';
 import { Trophy, Clock, Gavel, CheckCircle } from 'lucide-react';
 
 export default function DisplayPage() {
@@ -85,7 +85,7 @@ export default function DisplayPage() {
     return Math.max(0, auction.timer_duration - elapsed);
   })();
 
-  // 60s bidding countdown
+  // Bidding countdown
   const biddingHasDeadline = auction?.status === 'open' && !!auction.bidding_ends_at;
   const biddingRemaining = auction?.status === 'open' ? remainingSeconds(auction.bidding_ends_at) : 0;
 
@@ -95,7 +95,8 @@ export default function DisplayPage() {
     return () => clearInterval(interval);
   }, [timerRunning, biddingHasDeadline]);
 
-  // The display can also settle the round when the 60s window expires.
+  // The display also settles phases on its own once their clock expires:
+  // bidding deadline → crown the winner, question timer → TIME'S UP.
   useAutoCloseBidding(auction);
 
   // Verdict announcements: settle_answer() writes one round_results row per
@@ -298,22 +299,26 @@ export default function DisplayPage() {
                 {rankings.map(team => (
                   <div
                     key={team.id}
-                    className={`flex items-center justify-between p-3 rounded-xl transition-all ${
-                      team.rank <= 6
-                        ? 'bg-cyan-500/5 border border-cyan-500/10'
-                        : 'bg-dark-700 border border-transparent'
-                    }`}
+                    title={podiumLabel(team.rank)}
+                    className={cn(
+                      'flex items-center justify-between p-3 rounded-xl transition-all',
+                      podiumRowClass(team.rank) ||
+                        (team.rank <= TOP_QUALIFY_COUNT
+                          ? 'bg-cyan-500/5 border border-cyan-500/10'
+                          : 'bg-dark-700 border border-transparent')
+                    )}
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <span className={`w-8 shrink-0 text-lg font-mono font-bold ${
-                        team.rank === 1 ? 'text-amber-400' :
-                        team.rank <= 6 ? 'text-cyan-400' : 'text-slate-600'
-                      }`}>
+                      <span className={cn(
+                        'w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-lg font-mono font-bold',
+                        podiumRankClass(team.rank) ||
+                          (team.rank <= TOP_QUALIFY_COUNT ? 'text-cyan-400' : 'text-slate-600')
+                      )}>
                         {team.rank}
                       </span>
                       <div className="min-w-0">
                         <p className={`truncate font-bold ${
-                          team.rank <= 6 ? 'text-slate-900' : 'text-slate-400'
+                          team.rank <= TOP_QUALIFY_COUNT ? 'text-slate-900' : 'text-slate-400'
                         }`}>
                           {team.name}
                         </p>
@@ -321,13 +326,13 @@ export default function DisplayPage() {
                     </div>
                     <div className="shrink-0 text-right">
                       <p className={`text-xl font-mono font-bold ${
-                        team.rank <= 6 ? 'text-slate-900' : 'text-slate-500'
+                        team.rank <= TOP_QUALIFY_COUNT ? 'text-slate-900' : 'text-slate-500'
                       }`}>
                         {team.score}
                       </p>
                       <p className="text-xs font-mono text-cyan-400">{team.current_budget} TC</p>
                     </div>
-                    {isFinalized && team.rank <= 6 && (
+                    {isFinalized && team.rank <= TOP_QUALIFY_COUNT && (
                       <Badge variant="green" className="ml-2">✓</Badge>
                     )}
                   </div>
@@ -360,7 +365,7 @@ export default function DisplayPage() {
         {/* Footer */}
         <div className="text-center mt-6">
           <p className="text-xs text-slate-700 font-mono">
-            TECH AUCTION — National Level Quiz Competition — Round 3
+            TECH AUCTION — {settings?.event_name || 'Live Auction Quiz'}
           </p>
         </div>
       </div>

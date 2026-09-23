@@ -4,7 +4,7 @@ export type UserRole = 'admin' | 'team';
 export type AuctionStatus = 'scheduled' | 'open' | 'closed' | 'question' | 'completed' | 'cancelled';
 
 /** Fixed bidding window once an auction opens (seconds). */
-export const BIDDING_DURATION_SECONDS = 60;
+export const BIDDING_DURATION_SECONDS = 45;
 
 /** MCQ choice key for a question. */
 export type McqKey = 'A' | 'B' | 'C' | 'D';
@@ -142,6 +142,9 @@ export interface RoundResult {
   reward: number;
   penalty: number;
   graded_by: 'auto' | 'admin';
+  /** true when the round was settled by the question timer running out, not by
+   *  a pick — the announcements render TIME'S UP instead of WRONG. */
+  expired: boolean;
   created_at: string;
 }
 
@@ -278,6 +281,6 @@ export const DIFFICULTY_PRESETS: Record<Difficulty, Omit<AuctionItem, 'id' | 'na
 };
 
 export const DEFAULT_STARTING_BUDGET = 1000;
-export const DEFAULT_QUESTION_TIME = 20;
-export const TOP_QUALIFY_COUNT = 4;
-export const TEAM_COUNT = 8;
+export const DEFAULT_QUESTION_TIME = 25;
+/** Teams that survive the cut advance — see getRankings(). */
+export const TOP_QUALIFY_COUNT = 6;

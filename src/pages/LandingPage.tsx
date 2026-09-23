@@ -29,7 +29,7 @@ export default function LandingPage() {
 
         {/* Subtitle */}
         <p className="text-lg md:text-xl text-slate-400 font-mono tracking-[0.3em] mb-2">
-          NATIONAL LEVEL QUIZ COMPETITION
+          RUN YOUR OWN AUCTION QUIZ
         </p>
         <div className="w-32 h-0.5 bg-gradient-to-r from-transparent via-cyan-500 to-transparent mx-auto mb-12" />
 
@@ -78,7 +78,7 @@ export default function LandingPage() {
 
         {/* Footer */}
         <p className="mt-16 text-xs text-slate-700 font-mono">
-          Round 3 — Auction Quiz Format
+          Bid · Answer · Score — auction quiz platform for any sized event
         </p>
       </div>
     </div>

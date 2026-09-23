@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { getRankings, getEventSettings, exportFinalResults, exportAuctionHistory } from '../../lib/queries';
 import { useTeamRealtime, useEventSettingsRealtime } from '../../hooks/useRealtime';
 import { LoadingSpinner, Badge } from '../../components/ui';
-import { formatCoins, downloadCSV } from '../../lib/utils';
+import { formatCoins, downloadCSV, cn, podiumRowClass, podiumRankClass, podiumLabel } from '../../lib/utils';
 import type { TeamWithRank, EventSettings } from '../../types';
+import { TOP_QUALIFY_COUNT } from '../../types';
 import { Trophy, Medal, Download, BarChart3 } from 'lucide-react';
 
 export default function AdminLeaderboard() {
@@ -62,21 +63,21 @@ export default function AdminLeaderboard() {
         </div>
       </div>
 
-      {/* Top 6 Podium */}
+      {/* Qualifier Podium — gold / silver / bronze on the top three */}
       <div className="grid grid-cols-6 gap-4">
-        {rankings.slice(0, 6).map((team, idx) => (
-          <div key={team.id} className={`card text-center animate-scale-in ${
-            idx === 0 ? 'neon-border glow-cyan' : 'neon-border'
-          }`} style={{ animationDelay: `${idx * 100}ms` }}>
-            <div className={`w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center ${
-              idx === 0 ? 'bg-amber-500/20 text-amber-400' :
-              idx === 1 ? 'bg-slate-400/20 text-slate-600' :
-              idx === 2 ? 'bg-amber-700/20 text-amber-600' :
-              'bg-cyan-500/10 text-cyan-400'
-            }`}>
+        {rankings.slice(0, TOP_QUALIFY_COUNT).map((team, idx) => (
+          <div key={team.id} title={podiumLabel(team.rank)} className={cn(
+            'card text-center animate-scale-in',
+            idx === 0 ? 'neon-border glow-cyan' : 'neon-border',
+            podiumRowClass(team.rank)
+          )} style={{ animationDelay: `${idx * 100}ms` }}>
+            <div className={cn(
+              'w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center',
+              podiumRankClass(team.rank) || 'bg-cyan-500/10 text-cyan-400'
+            )}>
               {idx === 0 ? <Trophy size={24} /> : <Medal size={24} />}
             </div>
-            <p className={`text-xs font-mono mb-1 ${idx === 0 ? 'text-amber-400' : 'text-slate-500'}`}>
+            <p className={`text-xs font-mono mb-1 ${idx === 0 ? 'text-amber-700' : 'text-slate-500'}`}>
               #{team.rank}
             </p>
             <p className="text-lg font-bold text-slate-900 mb-2">{team.short_name}</p>
@@ -110,14 +111,16 @@ export default function AdminLeaderboard() {
             </thead>
             <tbody>
               {rankings.map(team => (
-                <tr key={team.id} className={`border-b border-dark-400/50 ${
-                  team.rank <= 6 ? 'bg-cyan-500/5' : ''
-                }`}>
+                <tr key={team.id} title={podiumLabel(team.rank)} className={cn(
+                  'border-b border-dark-400/50',
+                  podiumRowClass(team.rank) || (team.rank <= TOP_QUALIFY_COUNT ? 'bg-cyan-500/5' : '')
+                )}>
                   <td className="py-4 px-4">
-                    <span className={`font-mono font-bold text-lg ${
-                      team.rank === 1 ? 'text-amber-400' :
-                      team.rank <= 6 ? 'text-cyan-400' : 'text-slate-500'
-                    }`}>
+                    <span className={cn(
+                      'inline-flex w-9 h-9 items-center justify-center rounded-lg font-mono font-bold text-lg',
+                      podiumRankClass(team.rank) ||
+                        (team.rank <= TOP_QUALIFY_COUNT ? 'text-cyan-400' : 'text-slate-500')
+                    )}>
                       #{team.rank}
                     </span>
                   </td>
@@ -140,8 +143,10 @@ export default function AdminLeaderboard() {
                     <span className="font-mono text-violet-400">{team.auctions_won}</span>
                   </td>
                   <td className="py-4 px-4 text-center">
-                    <Badge variant={isFinalized ? (team.qualified ? 'green' : 'red') : (team.rank <= 6 ? 'cyan' : 'default')}>
-                      {isFinalized ? (team.qualified ? 'QUALIFIED' : 'ELIMINATED') : (team.rank <= 6 ? 'IN TOP 6' : 'AT RISK')}
+                    <Badge variant={isFinalized ? (team.qualified ? 'green' : 'red') : (team.rank <= TOP_QUALIFY_COUNT ? 'cyan' : 'default')}>
+                      {isFinalized
+                        ? (team.qualified ? 'QUALIFIED' : 'ELIMINATED')
+                        : (team.rank <= TOP_QUALIFY_COUNT ? 'IN THE CUT' : 'AT RISK')}
                     </Badge>
                   </td>
                 </tr>

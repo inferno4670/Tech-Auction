@@ -4,8 +4,9 @@
 
 ### *Where knowledge goes under the hammer*
 
-**A real-time auction-quiz arena for national-level technical competitions.**
-8 teams · 1,000 Tech Coins · 60-second bidding wars · one winner per question.
+**A real-time auction-quiz arena you can run anywhere** — a quiz night, a classroom,
+a club meet, a corporate offsite, or a full finals stage.
+Any number of teams · 1,000 Tech Coins · 45-second bidding wars · one winner per question.
 
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black&style=for-the-badge)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6?logo=typescript&logoColor=white&style=for-the-badge)](https://www.typescriptlang.org)
@@ -20,17 +21,24 @@
 
 ## 🎯 The Format
 
-Round 3 of the quiz — *the auction round*. Every team starts with the same purse of
-**Tech Coins (TC)**. The quizmaster puts a technology up for auction, and teams bid
-against each other in a **60-second war**. The highest bidder buys the *right* to
-answer the question attached to the item:
+One auction, one question, every team in the room. Each team starts with the same
+purse of **Tech Coins (TC)**. A host puts an item up for auction, teams bid against
+each other in a **45-second war**, and the highest bidder buys the *right* to answer
+the question attached to it — on a **25-second clock**, auto-verified the moment
+they tap an option:
 
 > Bid high, answer right → your bid is **refunded** plus a **+150 TC** bonus.
 > Bid high, answer wrong → your coins are **gone**.
+> Let the clock run out → marked wrong, **TIME'S UP** across the hall.
 > Sit out too long → the market punishes you.
 
 Survive to the top 6 and you advance. Overbid greedily and you're funding everyone
 else's scoreboard.
+
+**No prerequisite round, no fixed cast.** The platform *is* the event: two teams in
+a classroom or fifteen on a stage. Create the teams, add your questions, open the
+projector — auctions, the MCQ bank, the scoring economy, live rankings, an audit
+trail and CSV exports are all already in the box.
 
 ```
         ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
@@ -46,14 +54,16 @@ else's scoreboard.
 
 ```mermaid
 flowchart LR
-    A[⚒ Admin opens<br/>an auction] --> B[💸 Teams bid in a<br/>60s countdown]
+    A[⚒ Host opens<br/>an auction] --> B[💸 Teams bid in a<br/>45s countdown]
     B -->|deadline hits| C[⚖️ Atomic settlement<br/>close_bidding RPC]
-    C -->|highest bid wins<br/>ties → earliest| D[❓ Winner picks the MCQ<br/>auto-verified vs answer key]
+    C -->|highest bid wins<br/>ties → earliest| D[❓ Winner picks the MCQ<br/>25s clock, auto-verified]
     C -->|no bids| H[📦 Item closed,<br/>skipped]
     D --> E[✅ Correct<br/>refund + 150 TC — instant]
     D --> F[❌ Wrong<br/>bid lost — instant]
-    E --> G[🔄 Inactivity penalties<br/>applied, next item]
+    D -->|clock runs out| I[⏰ TIME'S UP<br/>wrong + correct answer<br/>on every screen]
+    E --> G[🔄 Penalties applied<br/>no bid −150 · 3 dry −100]
     F --> G
+    I --> G
     H --> G
     G --> A
 ```
@@ -62,18 +72,21 @@ flowchart LR
 
 | Rule | Effect |
 |---|---|
-| **Correct answer** | Bid fully refunded **+ 150 TC bonus** |
+| **Correct answer** | Bid fully refunded **+ 150 TC bonus** — verified inside the database, instantly |
 | **Wrong answer** | You lose exactly what you bid — no extra penalty |
-| **Inactivity** | 3 rounds without winning → automatic **−150 TC** |
+| **Clock runs out** | The round settles itself: wrong, bid lost, **TIME'S UP** + the correct answer on every screen |
+| **Sat out the bidding** | Never placed a bid in a round that ran → automatic **−150 TC** |
+| **Inactivity** | 3 straight rounds without a win → automatic **−100 TC** |
+| **One charge per round** | If a team trips both penalties, only the larger applies — one round can never double-charge |
 | **Difficulty presets** | `basic` 50 TC / `intermediate` 100 TC / `expert` 200 TC starting bids, with matching reward & penalty tiers |
-| **Qualification** | Top **6** of 10–15 teams advance (score → budget → correct answers tie-break) |
+| **Qualification** | Top **6** advance by default (score → budget → correct answers tie-break) — the cutoff is a single constant |
 
 ## 🖥 Three screens, one truth
 
 | | **🛡 Admin Control Room** | **👥 Team Dashboard** | **📺 Projector Display** |
 |---|---|---|---|
 | Route | `/admin` (auth) | `/team` (auth) | `/display` (public) |
-| Powers | Start/close auctions, question timer, grade answers (override only — MCQs auto-verify), bonuses, TC adjustments, item editor with MCQ builder, audit logs, CSV export, demo reset | Quick-bid chips + custom bids, live bid feed, MCQ picker with **instant verdict**, budget & rank stats | Giant bid counter, bid feed, leaderboard, countdowns for the whole hall |
+| Powers | Start/close auctions, pause/restart the answer clock, grade answers (override only — MCQs auto-verify), bonuses, TC adjustments, item editor with MCQ builder, audit logs, CSV export, demo reset | Quick-bid chips + custom bids, live bid feed, MCQ picker with **instant verdict**, budget & rank stats, TC-adjustment notices | Giant bid counter, bid feed, gold/silver/bronze leaderboard, countdowns and TIME'S UP announcements for the whole hall |
 | Sees | Everything, including the answer key | Item, bids, own attempt | Item, bids, MCQ options — no answers |
 
 Every screen ticks from the **same clock** and settles from the **same transaction**.
@@ -177,9 +190,10 @@ The winning team saw its verdict, but the quizmaster's screen, the other teams a
 the audience were left guessing. **Fix:** `settle_answer()` writes one public row to
 `round_results` inside the settlement transaction, and every panel subscribes to that
 table over Realtime — admin toast, team toast, and a full-screen projector
-announcement (`CORRECT! / WRONG!`, the TC swing, the correct option on a miss, and
-whether it was auto-verified or quizmaster-graded). A last-result strip stays on all
-three screens after the toast fades. No polling, no refresh, one source of truth.
+announcement (`CORRECT! / WRONG! / TIME'S UP!`, the TC swing, the correct option on a
+miss, and whether it was auto-verified or quizmaster-graded). A last-result strip
+stays on all three screens after the toast fades. No polling, no refresh, one source
+of truth.
 </details>
 
 <details>
@@ -193,6 +207,22 @@ inactivity ticks, auction completed. The team sees its verdict instantly; the
 admin panel flips to a read-only AUTO-VERIFIED banner. Items without an answer
 key (or the quizmaster's judgment call) still go through the `grade_answer()`
 override, and a graded round can never be re-graded.
+</details>
+
+<details>
+<summary><b>⏰ Problem 7: "the show waited for the host to press START"</b></summary>
+
+The question countdown used to be a manual button: a distracted host stalled the
+round, and a question nobody answered stayed open forever. **Fix:** the 25-second
+answer clock is stamped by the *same transaction* that hands the question over
+(`close_bidding()`), and every client schedules that deadline locally so it fires the
+moment it passes — no waiting on the next realtime event, because a quiet round
+produces none. The idempotent `expire_question()` RPC then settles the round as wrong
+(bid lost, wrong counter bumped, `expired = true` on the announcement), which is what
+renders **TIME'S UP!** plus the correct answer on the projector, every team dashboard
+and the admin panel. A pick fired at the buzzer is honoured inside the same 2-second
+grace the bidding window uses. The host keeps PAUSE / RESUME / RESTART and the manual
+grade override for judgment calls — but the show never stalls waiting for a click.
 </details>
 
 <details>
@@ -228,11 +258,13 @@ npm install
    database/migrations/005_add_timer_paused.sql
    database/migrations/006_ensure_admin_profile.sql
    database/migrations/007_fix_bids_upsert_and_rls.sql
-   database/migrations/008_mcq_bidding_timer_and_scoring.sql   # MCQ + 60s timer + atomic settlement
+   database/migrations/008_mcq_bidding_timer_and_scoring.sql   # MCQ options + bidding deadline + atomic settlement
    database/migrations/009_pin_get_server_time_search_path.sql
    database/migrations/010_anon_read_for_display_route.sql     # public projector reads
    database/migrations/011_leaderboard_ranks_and_auto_verified_mcq.sql  # true ranks + self-grading MCQs
    database/migrations/012_atomic_bids_and_round_announcements.sql       # atomic bids, buzzer grace, result announcements
+   database/migrations/013_audit_delete_policy.sql                      # audit clear / per-entry delete
+   database/migrations/014_auto_question_timer_and_penalties.sql         # self-running clocks, TIME'S UP, no-bid & dry-streak penalties
    ```
 
    All migrations are idempotent — safe to re-run.
@@ -254,7 +286,7 @@ npm run dev        # http://localhost:5173
 | Who | How |
 |---|---|
 | 🛡 **Quizmaster** | Supabase Auth → add user → `INSERT INTO profiles (id, email, role, display_name) VALUES ('<user-id>', '...', 'admin', 'Quizmaster');` |
-| 👥 **Teams** | Create teams in the admin UI (auto-generates 8), then link each auth user: `INSERT INTO team_members (user_id, team_id) VALUES ('<user-id>', '<team-id>');` |
+| 👥 **Teams** | Create as many teams as your event needs in the admin UI, then link each auth user: `INSERT INTO team_members (user_id, team_id) VALUES ('<user-id>', '<team-id>');` |
 
 ### 5 · Run the show
 
@@ -277,7 +309,8 @@ src/
 ├── hooks/
 │   ├── useAuth.tsx   # Auth context
 │   ├── useRealtime.ts# Supabase Realtime subscriptions (auctions, bids, teams, settings, results)
-│   ├── useAutoCloseBidding.ts  # Shared 60s deadline → idempotent settlement
+│   ├── useAutoCloseBidding.ts  # Shared phase deadlines → idempotent settlement
+│   │                           #   (bidding close + TIME'S UP clock)
 │   └── useRoundResults.ts      # Round verdicts → toast / projector announcement
 ├── lib/
 │   ├── supabase.ts   # Client
@@ -288,7 +321,7 @@ src/
 └── index.css         # Tailwind 4 theme, neon glow, animations
 
 database/
-├── migrations/       # 001 → 012, ordered, idempotent
+├── migrations/       # 001 → 014, ordered, idempotent
 └── seed.sql          # Event settings + sample items
 ```
 

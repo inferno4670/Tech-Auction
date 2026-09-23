@@ -12,9 +12,9 @@ import {
 import { syncServerTime, serverNow, serverNowIso, remainingSeconds } from '../../lib/serverTime';
 import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
 import { Badge, ConfirmModal, Modal, LoadingSpinner, RoundResultStrip, RoundResultToast } from '../../components/ui';
-import { formatTime, getDifficultyColor } from '../../lib/utils';
+import { formatTime, getDifficultyColor, cn, podiumRowClass, podiumRankClass, podiumLabel } from '../../lib/utils';
 import type { TeamWithRank, AuctionItem, AuctionWithItem, EventSettings, Bid, QuestionAttempt } from '../../types';
-import { MCQ_KEYS } from '../../types';
+import { MCQ_KEYS, TOP_QUALIFY_COUNT, DEFAULT_QUESTION_TIME } from '../../types';
 import {
   Pause, Square, Gavel, Clock, CheckCircle,
   XCircle, ChevronRight, SkipForward, Award, Loader2, Zap, Coins
@@ -126,7 +126,7 @@ export default function AdminLiveControl() {
     return Math.max(0, auction.timer_duration - elapsed);
   })();
 
-  // 60s bidding countdown — one absolute deadline (auction.bidding_ends_at).
+  // Bidding countdown — one absolute deadline (auction.bidding_ends_at).
   const biddingHasDeadline = auction?.status === 'open' && !!auction.bidding_ends_at;
   const biddingRemaining = auction?.status === 'open' ? remainingSeconds(auction.bidding_ends_at) : 0;
 
@@ -136,7 +136,7 @@ export default function AdminLiveControl() {
     return () => clearInterval(interval);
   }, [timerRunning, biddingHasDeadline]);
 
-  // Auto-close when the 60s window expires (shared with the team dashboards
+  // Auto-settle when a phase's clock expires (shared with the team dashboards
   // and the projector — idempotent RPC, safe to fire from every client).
   useAutoCloseBidding(auction);
 
@@ -170,7 +170,7 @@ export default function AdminLiveControl() {
   const handleStartAuction = async (itemId: string) => {
     setProcessing(true);
     try {
-      const a = await startAuction(itemId, settings?.default_question_time || 20);
+      const a = await startAuction(itemId, settings?.default_question_time || DEFAULT_QUESTION_TIME);
       await logEvent('auction_started', 'auction', a.id, { item_id: itemId });
       await loadData();
     } catch (err: any) {
@@ -429,7 +429,7 @@ export default function AdminLiveControl() {
                 <>
                   <button onClick={async () => {
                     if (!auction) return;
-                    const duration = settings?.default_question_time || 20;
+                    const duration = settings?.default_question_time || DEFAULT_QUESTION_TIME;
                     await updateAuction(auction.id, {
                       timer_started_at: serverNowIso(),
                       timer_duration: duration,
@@ -438,7 +438,7 @@ export default function AdminLiveControl() {
                   }}
                     className="btn-primary flex items-center gap-2">
                     <Clock size={16} />
-                    {timerRunning ? 'RESTART TIMER' : 'START TIMER'} ({settings?.default_question_time || 20}s)
+                    {timerRunning ? 'RESTART TIMER' : 'START TIMER'} ({settings?.default_question_time || DEFAULT_QUESTION_TIME}s)
                   </button>
                   {timerRunning && (
                     <button onClick={async () => {
@@ -644,12 +644,20 @@ export default function AdminLiveControl() {
         <h3 className="text-sm font-mono text-slate-500 mb-3 tracking-wider">LIVE RANKINGS</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {rankings.slice(0, 8).map(team => (
-            <div key={team.id} className={`p-3 rounded-lg ${
-              team.rank <= 6 ? 'bg-cyan-500/5 border border-cyan-500/10' : 'bg-dark-700 border border-dark-400'
-            }`}>
+            <div key={team.id} title={podiumLabel(team.rank)} className={cn(
+              'p-3 rounded-lg',
+              podiumRowClass(team.rank) ||
+                (team.rank <= TOP_QUALIFY_COUNT
+                  ? 'bg-cyan-500/5 border border-cyan-500/10'
+                  : 'bg-dark-700 border border-dark-400')
+            )}>
               <div className="flex items-center justify-between mb-1">
-                <span className={`text-xs font-mono font-bold ${team.rank <= 6 ? 'text-cyan-400' : 'text-slate-500'}`}>
-                  #{team.rank}
+                <span className={cn(
+                  'w-6 h-6 shrink-0 rounded-md flex items-center justify-center text-xs font-mono font-bold',
+                  podiumRankClass(team.rank) ||
+                    (team.rank <= TOP_QUALIFY_COUNT ? 'text-cyan-400' : 'text-slate-500')
+                )}>
+                  {team.rank}
                 </span>
                 <span className="text-xs font-mono text-slate-900">{team.short_name}</span>
               </div>

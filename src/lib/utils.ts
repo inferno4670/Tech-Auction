@@ -15,6 +15,44 @@ export function formatTime(seconds: number): string {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
+// ─── Leaderboard podium styling (ranks 1–3) ──────────────────────────────────
+//
+// Gold, silver and bronze are marked with a LIGHT tint: a soft row wash, a
+// matching border and a small rank chip. Team names, scores and TC figures keep
+// their own colours untouched, so the medal can never wash out the data — and
+// every leaderboard (admin dashboard, leaderboard page, live control, team
+// panel, projector) shares these three helpers, so the podium looks identical
+// everywhere.
+
+export function podiumRowClass(rank: number): string {
+  switch (rank) {
+    case 1: return 'bg-amber-500/15 border border-amber-500/50';
+    case 2: return 'bg-slate-400/20 border border-slate-400/60';
+    case 3: return 'bg-orange-500/15 border border-orange-500/45';
+    default: return '';
+  }
+}
+
+/** Chip / rank-number styling for the top three (light tint + readable ink). */
+export function podiumRankClass(rank: number): string {
+  switch (rank) {
+    case 1: return 'bg-amber-500/20 text-amber-700 border border-amber-500/50';
+    case 2: return 'bg-slate-400/25 text-slate-600 border border-slate-400/60';
+    case 3: return 'bg-orange-500/20 text-orange-700 border border-orange-500/50';
+    default: return '';
+  }
+}
+
+/** Medal name for the top three (used for tooltips / screen readers). */
+export function podiumLabel(rank: number): string {
+  switch (rank) {
+    case 1: return 'Gold — 1st place';
+    case 2: return 'Silver — 2nd place';
+    case 3: return 'Bronze — 3rd place';
+    default: return `Rank ${rank}`;
+  }
+}
+
 export function getDifficultyColor(difficulty: string): string {
   switch (difficulty) {
     case 'basic': return 'text-green-400 bg-green-500/10 border-green-500/30';

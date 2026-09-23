@@ -1,4 +1,4 @@
-import { CheckCircle, XCircle } from 'lucide-react';
+import { CheckCircle, XCircle, Clock } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { RoundResult } from '../../types';
 
@@ -7,12 +7,14 @@ import type { RoundResult } from '../../types';
 // Both views render the same fact sheet: which team answered, right or wrong,
 // the TC swing, and — on a miss — the correct option. `graded_by` tells the
 // audience whether the database verified the pick or the quizmaster marked it.
+// `expired` means nobody answered in time, so the verdict reads TIME'S UP.
 
 function tcDelta(result: RoundResult) {
   return result.result === 'correct' ? `+${result.reward} TC` : `−${result.penalty} TC`;
 }
 
 function sourceLabel(result: RoundResult) {
+  if (result.expired) return 'time expired';
   return result.graded_by === 'auto' ? 'auto-verified' : 'graded by quizmaster';
 }
 
@@ -32,9 +34,13 @@ export function RoundResultToast({ result }: { result: RoundResult }) {
       <div className="flex items-center gap-2">
         {correct
           ? <CheckCircle className="text-green-400 shrink-0" size={18} />
-          : <XCircle className="text-red-400 shrink-0" size={18} />}
-        <p className={cn('font-bold text-sm', correct ? 'text-green-400' : 'text-red-400')}>
-          {result.team_name || 'Team'} answered {correct ? 'CORRECTLY' : 'WRONG'}
+          : result.expired
+            ? <Clock className="text-amber-500 shrink-0" size={18} />
+            : <XCircle className="text-red-400 shrink-0" size={18} />}
+        <p className={cn('font-bold text-sm', correct ? 'text-green-400' : result.expired ? 'text-amber-600' : 'text-red-400')}>
+          {result.expired
+            ? `${result.team_name || 'Team'} — TIME'S UP`
+            : `${result.team_name || 'Team'} answered ${correct ? 'CORRECTLY' : 'WRONG'}`}
         </p>
       </div>
       <p className="text-sm font-mono text-slate-900 mt-1">
@@ -71,11 +77,17 @@ export function RoundResultOverlay({ result }: { result: RoundResult }) {
       >
         {correct
           ? <CheckCircle className="mx-auto text-green-400 mb-6" size={72} />
-          : <XCircle className="mx-auto text-red-400 mb-6" size={72} />}
+          : result.expired
+            ? <Clock className="mx-auto text-amber-500 mb-6" size={72} />
+            : <XCircle className="mx-auto text-red-400 mb-6" size={72} />}
 
-        <p className={cn('text-6xl font-black tracking-tight mb-3', correct ? 'text-green-400' : 'text-red-400')}>
-          {correct ? 'CORRECT!' : 'WRONG!'}
-        </p>
+        {result.expired ? (
+          <p className="text-6xl font-black tracking-tight mb-3 text-amber-600">TIME'S UP!</p>
+        ) : (
+          <p className={cn('text-6xl font-black tracking-tight mb-3', correct ? 'text-green-400' : 'text-red-400')}>
+            {correct ? 'CORRECT!' : 'WRONG!'}
+          </p>
+        )}
         <p className="break-words text-4xl font-bold text-slate-900 mb-6">{result.team_name || 'Team'}</p>
 
         <p className={cn('break-words text-5xl font-mono font-black mb-8', correct ? 'text-cyan-400 text-glow-cyan' : 'text-red-400')}>
@@ -113,12 +125,17 @@ export function RoundResultStrip({ result, className }: { result: RoundResult; c
       <div className="flex items-center gap-2 min-w-0">
         {correct
           ? <CheckCircle className="text-green-400 shrink-0" size={16} />
-          : <XCircle className="text-red-400 shrink-0" size={16} />}
+          : result.expired
+            ? <Clock className="text-amber-500 shrink-0" size={16} />
+            : <XCircle className="text-red-400 shrink-0" size={16} />}
         <span className="min-w-0 truncate font-bold text-sm text-slate-900">
           {result.team_name || 'Team'}
         </span>
-        <span className={cn('shrink-0 text-xs font-mono font-bold', correct ? 'text-green-400' : 'text-red-400')}>
-          {correct ? 'CORRECT' : 'WRONG'}
+        <span className={cn(
+          'shrink-0 text-xs font-mono font-bold',
+          correct ? 'text-green-400' : result.expired ? 'text-amber-600' : 'text-red-400'
+        )}>
+          {correct ? 'CORRECT' : result.expired ? "TIME'S UP" : 'WRONG'}
         </span>
         <span className={cn('ml-auto shrink-0 font-mono font-bold', correct ? 'text-cyan-400' : 'text-red-400')}>
           {tcDelta(result)}

@@ -11,14 +11,17 @@ import {
 import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
 import { StatCard, Badge, LoadingSpinner, RoundResultStrip, RoundResultToast } from '../../components/ui';
 import { AnimatedNumber } from '../../components/ui/AnimatedNumber';
-import { formatTime, getDifficultyColor } from '../../lib/utils';
+import { formatTime, getDifficultyColor, cn, podiumRowClass, podiumRankClass, podiumLabel } from '../../lib/utils';
 import { syncServerTime, serverNow, remainingSeconds } from '../../lib/serverTime';
 import type { Team, TeamWithRank, AuctionWithItem, EventSettings, Bid, BudgetTransaction, QuestionAttempt } from '../../types';
-import { MCQ_KEYS } from '../../types';
+import { MCQ_KEYS, TOP_QUALIFY_COUNT } from '../../types';
 import {
   Coins, Trophy, Medal, Gavel, Zap, AlertCircle,
   CheckCircle, XCircle, Timer, Clock
 } from 'lucide-react';
+
+/** How long a transient message stays on a team's screen before clearing. */
+const MESSAGE_DISMISS_MS = 2500;
 
 type TeamViewState =
   | 'waiting'
@@ -41,9 +44,11 @@ export default function TeamDashboard() {
   const [bidLoading, setBidLoading] = useState(false);
   // const [connectionStatus, setConnectionStatus] = useState<'live' | 'reconnecting' | 'offline'>('live');
   const [bids, setBids] = useState<Bid[]>([]);
-  // Admin TC add/deducts with the quizmaster's reason — shown to the team so
-  // a budget change is never unexplained.
+  // Admin TC add/deducts with the quizmaster's reason — flashed to the team so
+  // a budget change is never unexplained, then cleared like every other
+  // message on this screen.
   const [tcAdjustments, setTcAdjustments] = useState<BudgetTransaction[]>([]);
+  const [showTcMessage, setShowTcMessage] = useState(false);
   const [myAttempt, setMyAttempt] = useState<QuestionAttempt | null>(null);
   const [answerLoading, setAnswerLoading] = useState(false);
   const [answerError, setAnswerError] = useState('');
@@ -126,6 +131,28 @@ export default function TeamDashboard() {
   // A new auction clears the previous question's instant verdict.
   useEffect(() => { setAnswerOutcome(null); }, [auction?.id]);
 
+  // Every message on the team screen is transient: the instant verdict clears
+  // itself a moment after it appears instead of stacking up on the dashboard.
+  useEffect(() => {
+    if (!answerOutcome) return;
+    const t = window.setTimeout(() => setAnswerOutcome(null), MESSAGE_DISMISS_MS);
+    return () => window.clearTimeout(t);
+  }, [answerOutcome]);
+
+  // Same for the TC message: show it when the ledger CHANGES (the admin just
+  // added or deducted coins — including the reason they typed), then hide it.
+  // Comparing ids rather than array identity keeps background refreshes from
+  // re-flashing it on every realtime event.
+  const tcSignature = tcAdjustments.map(tx => tx.id).join(',');
+  const lastTcSignatureRef = useRef('');
+  useEffect(() => {
+    if (!tcSignature || tcSignature === lastTcSignatureRef.current) return;
+    lastTcSignatureRef.current = tcSignature;
+    setShowTcMessage(true);
+    const t = window.setTimeout(() => setShowTcMessage(false), MESSAGE_DISMISS_MS);
+    return () => window.clearTimeout(t);
+  }, [tcSignature]);
+
   // Realtime
   useAuctionRealtime(() => { if (mountedRef.current) loadData(); });
   useTeamRealtime(() => { if (mountedRef.current) loadData(); }, authTeam ? `id=eq.${authTeam.id}` : undefined);
@@ -152,7 +179,7 @@ export default function TeamDashboard() {
     return Math.max(0, auction.timer_duration - elapsed);
   })();
 
-  // 60s bidding countdown — one absolute deadline (auction.bidding_ends_at)
+  // Bidding countdown — one absolute deadline (auction.bidding_ends_at)
   const biddingHasDeadline = auction?.status === 'open' && !!auction.bidding_ends_at;
   const biddingRemaining = auction?.status === 'open' ? remainingSeconds(auction.bidding_ends_at) : 0;
 
@@ -173,9 +200,12 @@ export default function TeamDashboard() {
   const { latest: lastResult, announcement: resultAnnouncement } = useRoundResults();
   useEffect(() => {
     if (!resultAnnouncement) return;
-    if (team && resultAnnouncement.team_id === team.id) return;
-    toast.custom(() => <RoundResultToast result={resultAnnouncement} />, { duration: 8000 });
-  }, [resultAnnouncement, team]);
+    // The winning team already flashed its own big verdict banner for a pick it
+    // submitted — no need to say it twice. When the round ended on the clock
+    // there is no banner, so the toast is exactly how they learn it.
+    if (team && resultAnnouncement.team_id === team.id && answerOutcome?.graded) return;
+    toast.custom(() => <RoundResultToast result={resultAnnouncement} />, { duration: MESSAGE_DISMISS_MS });
+  }, [resultAnnouncement, team, answerOutcome]);
 
 
   if (loading) {
@@ -399,7 +429,7 @@ export default function TeamDashboard() {
         <StatCard
           label="RANK"
           value={`#${myRank?.rank || '-'}`}
-          color={myRank && myRank.rank <= 6 ? 'green' : 'red'}
+          color={myRank && myRank.rank <= TOP_QUALIFY_COUNT ? 'green' : 'red'}
           icon={<Medal size={16} />}
         />
         <StatCard
@@ -410,8 +440,8 @@ export default function TeamDashboard() {
         />
       </div>
 
-      {/* Manual TC adjustments — the quizmaster's reason, visible to the team */}
-      {tcAdjustments.length > 0 && (
+      {/* Manual TC adjustments — the quizmaster's reason, flashed then cleared */}
+      {tcAdjustments.length > 0 && showTcMessage && (
         <div className="card">
           <h3 className="text-sm font-mono text-slate-500 mb-3 tracking-wider">TC ADJUSTMENTS</h3>
           <div className="space-y-2">
@@ -712,16 +742,21 @@ export default function TeamDashboard() {
           {rankings.slice(0, 8).map(t => (
             <div
               key={t.id}
-              className={`flex items-center justify-between py-2 px-3 rounded-lg ${
-                t.id === team.id ? 'bg-cyan-500/10 border border-cyan-500/20' :
-                t.rank <= 6 ? 'bg-dark-700' : 'bg-dark-800'
-              }`}
+              title={podiumLabel(t.rank)}
+              className={cn(
+                'flex items-center justify-between py-2 px-3 rounded-lg',
+                podiumRowClass(t.rank) ||
+                  (t.rank <= TOP_QUALIFY_COUNT ? 'bg-dark-700' : 'bg-dark-800'),
+                t.id === team.id && 'ring-1 ring-cyan-500/50'
+              )}
             >
               <div className="flex items-center gap-3">
-                <span className={`text-xs font-mono font-bold w-6 ${
-                  t.rank <= 6 ? 'text-cyan-400' : 'text-slate-600'
-                }`}>
-                  #{t.rank}
+                <span className={cn(
+                  'w-7 h-7 shrink-0 rounded-md flex items-center justify-center text-xs font-mono font-bold',
+                  podiumRankClass(t.rank) ||
+                    (t.rank <= TOP_QUALIFY_COUNT ? 'text-cyan-400' : 'text-slate-600')
+                )}>
+                  {t.rank}
                 </span>
                 <span className={`text-sm ${t.id === team.id ? 'text-slate-900 font-bold' : 'text-slate-600'}`}>
                   {t.name}

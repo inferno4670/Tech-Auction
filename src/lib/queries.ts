@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { serverNow, serverNowIso } from './serverTime';
-import { BIDDING_DURATION_SECONDS } from '../types';
+import { BIDDING_DURATION_SECONDS, TOP_QUALIFY_COUNT } from '../types';
 import type {
   Team,
   AuctionItem,
@@ -131,7 +131,7 @@ export async function getRankings(): Promise<TeamWithRank[]> {
   return sorted.map((team, index) => ({
     ...team,
     rank: index + 1,
-    qualified: index < 6,
+    qualified: index < TOP_QUALIFY_COUNT,
   }));
 }
 
@@ -255,7 +255,7 @@ export async function startAuction(itemId: string, timerDuration: number): Promi
       status: 'open',
       current_bid: item.data.starting_bid,
       timer_duration: timerDuration,
-      // Absolute 60s bidding deadline on the SERVER clock. Every panel counts
+      // Absolute bidding deadline (45s) on the SERVER clock. Every panel counts
       // down from this one timestamp, so admin/teams/display always agree.
       bidding_ends_at: new Date(serverNow() + BIDDING_DURATION_SECONDS * 1000).toISOString(),
       started_at: serverNowIso(),
@@ -369,7 +369,7 @@ export async function getBidsForAuction(auctionId: string): Promise<Bid[]> {
  * winner's budget and the budget transaction recorded in the SAME
  * transaction. Idempotent: closing an already-closed auction is a no-op.
  *
- * force=false → auto-close: only settles once the 60s bidding deadline passed.
+ * force=false → auto-close: only settles once the bidding deadline passed.
  * force=true  → admin "CLOSE BIDDING" (admin role enforced inside the RPC).
  */
 export async function closeBidding(auctionId: string, force = false) {
@@ -384,6 +384,33 @@ export async function closeBidding(auctionId: string, force = false) {
     already_closed?: boolean;
     winning_team_id: string | null;
     winning_bid?: number | null;
+  };
+}
+
+/**
+ * Settle a round whose question timer ran out — the clock decided, so the round
+ * is marked WRONG (bid lost) and the announcement is flagged `expired`, which
+ * is what makes every screen show TIME'S UP + the correct answer.
+ *
+ * Callable by any client (the projector is logged out) and safe to spam: the
+ * RPC locks the auction row, re-checks the deadline on the SERVER clock, only
+ * touches the question phase, ignores a paused/never-started timer, and keeps
+ * the verdict of a round that was already answered. Clients simply retry while
+ * it answers `not_expired`.
+ */
+export async function expireQuestion(auctionId: string) {
+  const { data, error } = await supabase.rpc('expire_question', {
+    p_auction_id: auctionId,
+  });
+  if (error) throw new Error(error.message);
+  return data as {
+    ok: boolean;
+    error?: string;
+    skipped?: boolean;
+    already_settled?: boolean;
+    already_graded?: boolean;
+    result?: 'correct' | 'wrong';
+    expired?: boolean;
   };
 }
 
@@ -459,6 +486,7 @@ export async function submitTeamAnswer(
       not_a_team_member: 'Your account is not linked to a team',
       only_winner_can_answer: 'Only the winning team can answer this question',
       already_graded: 'Your answer has already been graded',
+      time_up: "Time's up for this question",
     };
     throw new Error((res.error && messages[res.error]) || 'Failed to submit answer');
   }

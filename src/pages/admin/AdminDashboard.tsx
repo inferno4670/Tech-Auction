@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { getRankings, getEventSettings, updateEventSettings } from '../../lib/queries';
 import { useEventSettingsRealtime, useOnlineTeams } from '../../hooks/useRealtime';
 import { StatCard, Badge, ConfirmModal, LoadingSpinner } from '../../components/ui';
-import { formatCoins } from '../../lib/utils';
+import { formatCoins, cn, podiumRowClass, podiumRankClass, podiumLabel } from '../../lib/utils';
 import type { TeamWithRank, EventSettings } from '../../types';
+import { TOP_QUALIFY_COUNT } from '../../types';
 import {
   Trophy, Coins, Users, Gavel, Zap, Play, Pause,
   RotateCcw, CheckCircle, AlertTriangle, ArrowRight
@@ -209,12 +210,18 @@ export default function AdminDashboard() {
               {rankings.map(team => (
                 <tr
                   key={team.id}
-                  className="border-b border-dark-400/50 hover:bg-slate-100/50 transition-colors"
+                  title={podiumLabel(team.rank)}
+                  className={cn(
+                    'border-b border-dark-400/50 hover:bg-slate-100/50 transition-colors',
+                    podiumRowClass(team.rank)
+                  )}
                 >
                   <td className="py-3 px-4">
-                    <span className={`font-mono font-bold ${
-                      team.rank <= 6 ? 'text-cyan-400' : 'text-slate-500'
-                    }`}>
+                    <span className={cn(
+                      'inline-flex w-8 h-8 items-center justify-center rounded-lg font-mono font-bold',
+                      podiumRankClass(team.rank) ||
+                        (team.rank <= TOP_QUALIFY_COUNT ? 'text-cyan-400' : 'text-slate-500')
+                    )}>
                       #{team.rank}
                     </span>
                   </td>
@@ -222,7 +229,7 @@ export default function AdminDashboard() {
                     <div className="flex items-center gap-3">
                       <div className="relative">
                         <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
-                          team.rank <= 6
+                          team.rank <= TOP_QUALIFY_COUNT
                             ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
                             : 'bg-dark-500 text-slate-500 border border-dark-400'
                         }`}>
@@ -246,12 +253,11 @@ export default function AdminDashboard() {
                     <span className="text-slate-600 mx-1">/</span>
                     <span className="font-mono text-red-400">{team.wrong_answers}</span>
                   </td>
-                  <td className="py-3 px-4 text-center">
-                    <Badge variant={team.rank <= 6 ? 'green' : 'default'}>
-                      {settings?.status === 'finalized'
-                        ? (team.qualified ? 'QUALIFIED' : 'ELIMINATED')
-                        : (team.rank <= 6 ? 'IN POSITION' : 'AT RISK')}
-                    </Badge>
+                  <td className="py-3 px-4 text-center">                        <Badge variant={team.rank <= TOP_QUALIFY_COUNT ? 'green' : 'default'}>
+                          {settings?.status === 'finalized'
+                            ? (team.qualified ? 'QUALIFIED' : 'ELIMINATED')
+                            : (team.rank <= TOP_QUALIFY_COUNT ? 'IN POSITION' : 'AT RISK')}
+                        </Badge>
                   </td>
                 </tr>
               ))}

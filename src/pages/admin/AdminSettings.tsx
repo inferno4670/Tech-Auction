@@ -5,7 +5,8 @@ import {
 } from '../../lib/queries';
 import { supabase } from '../../lib/supabase';
 import { ConfirmModal, LoadingSpinner, Badge } from '../../components/ui';
-import type { EventSettings, Team } from '../../types';import { RotateCcw, AlertTriangle, Monitor,
+import type { EventSettings, Team } from '../../types';
+import { RotateCcw, AlertTriangle, Monitor,
   CheckCircle, Database, Trash2
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -194,9 +195,18 @@ export default function AdminSettings() {
     return <div className="flex items-center justify-center h-96"><LoadingSpinner text="Loading settings..." /></div>;
   }
 
+  // Reported straight from the database — the old checklist claimed a fixed
+  // "8 teams configured" whatever the event actually had.
+  const activeTeams = teams.filter(t => t.is_active).length;
   const setupChecklist = [
-    { label: '8 teams configured', done: teams.length >= 8 },
-    { label: 'Team accounts ready', done: teams.length > 0 },
+    {
+      label: `${activeTeams} team${activeTeams === 1 ? '' : 's'} configured`,
+      done: activeTeams > 0,
+    },
+    {
+      label: `Question time set to ${settings?.default_question_time ?? '—'}s`,
+      done: (settings?.default_question_time || 0) > 0,
+    },
     { label: 'Starting budgets configured', done: (settings?.starting_budget || 0) > 0 },
     { label: 'Questions configured', done: true },
     { label: 'Display tested', done: true },
