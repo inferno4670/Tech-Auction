@@ -12,10 +12,12 @@ export default function TeamLayout({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-dark-900 grid-bg">
       {/* Header */}
       <header className="glass-strong border-b border-dark-400 sticky top-0 z-40">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+        {/* Full-width bar (no max-w cap): brand tucks into the top-left
+            corner and controls into the top-right, however wide the screen. */}
+        <div className="px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center">
-              <Logo size={16} />
+            <div className="w-9 h-9 shrink-0 overflow-hidden rounded-lg bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center">
+              <Logo size={36} className="w-full h-full" />
             </div>
             <div>
               <h1 className="text-xs font-bold text-slate-900 tracking-widest">TECH AUCTION</h1>

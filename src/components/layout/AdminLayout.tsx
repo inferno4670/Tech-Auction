@@ -29,8 +29,8 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         {/* Logo */}
         <div className="p-6 border-b border-dark-400">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center">
-              <Logo size={20} />
+            <div className="w-10 h-10 shrink-0 overflow-hidden rounded-lg bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center">
+              <Logo size={40} className="w-full h-full" />
             </div>
             <div>
               <h1 className="text-sm font-bold text-slate-900 tracking-wider">TECH AUCTION</h1>
