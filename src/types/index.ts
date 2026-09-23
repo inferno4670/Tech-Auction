@@ -123,6 +123,28 @@ export interface QuestionAttempt {
   admin_id: string | null;
 }
 
+// ─── Round Result (graded-answer announcement) ───────────────────────────────
+//
+// Written by settle_answer() the moment a question is graded — whether the
+// team's pick was auto-verified or the quizmaster graded it by hand. Every
+// panel (admin, all team dashboards, the projector) subscribes to this table
+// over realtime, so the verdict appears everywhere at the same instant.
+export interface RoundResult {
+  id: string;
+  auction_id: string;
+  item_id: string | null;
+  item_name: string | null;
+  team_id: string | null;
+  team_name: string | null;
+  result: 'correct' | 'wrong';
+  selected_answer: string | null;
+  correct_answer: string | null;
+  reward: number;
+  penalty: number;
+  graded_by: 'auto' | 'admin';
+  created_at: string;
+}
+
 // ─── Score Transaction ───────────────────────────────────────────────────────
 
 export interface ScoreTransaction {

@@ -4,6 +4,7 @@ import { AnimatedNumber } from './AnimatedNumber';
 import { X, Loader2, Wifi, WifiOff, AlertTriangle } from 'lucide-react';
 
 export { Logo } from './Logo';
+export { RoundResultToast, RoundResultOverlay, RoundResultStrip } from './RoundResult';
 
 // ─── Connection Status ───────────────────────────────────────────────────────
 

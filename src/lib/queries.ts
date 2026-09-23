@@ -11,6 +11,7 @@ import type {
   TeamWithRank,
   AuctionWithItem,
   QuestionAttempt,
+  RoundResult,
 } from '../types';
 
 // ─── Event Settings ──────────────────────────────────────────────────────────
@@ -290,102 +291,53 @@ export async function completeAuction(id: string) {
 
 // ─── Bids ────────────────────────────────────────────────────────────────────
 
-export async function placeBid(auctionId: string, teamId: string, amount: number): Promise<Bid> {
-  // Server-side validation
-  const { data: auction, error: auctionError } = await supabase
-    .from('auctions')
-    .select('*, item:auction_items(starting_bid, minimum_increment)')
-    .eq('id', auctionId)
-    .single();
+/**
+ * Place (or raise) a bid — ATOMICALLY, inside the database.
+ *
+ * Why an RPC instead of the old read → upsert → guarded-update dance: at the
+ * buzzer the settlement could run BETWEEN those statements. close_bidding()
+ * would lock the auction, crown the second-last bidder and settle the round,
+ * while the late bid row was already stored — so the admin's feed showed a
+ * higher bid that never won (the "question went to the wrong team" bug).
+ *
+ * place_bid() takes the SAME row lock as close_bidding(), so the two can never
+ * interleave: the bid is either counted by the settlement or refused outright —
+ * never left behind as a ghost row. The team is identified from the JWT, and
+ * the 2s buzzer grace lets a bid fired before the deadline land just after it.
+ *
+ * Returns the accepted bid amount.
+ */
+export async function placeBid(auctionId: string, amount: number): Promise<number> {
+  const { data, error } = await supabase.rpc('place_bid', {
+    p_auction_id: auctionId,
+    p_amount: amount,
+  });
+  if (error) throw new Error(error.message);
 
-  if (auctionError || !auction) throw new Error('Auction not found');
-  if (auction.status !== 'open') throw new Error('Auction is not open for bidding');
-
-  // Bidding window expired — no more bids (the 60s auto-close settles it).
-  if (auction.bidding_ends_at && serverNow() >= new Date(auction.bidding_ends_at).getTime()) {
-    throw new Error('Bidding time is over for this item');
-  }
-
-  const item = auction.item as any;
-  if (amount <= auction.current_bid) {
-    throw new Error(`Bid must be higher than current bid of ${auction.current_bid}`);
-  }
-  if (amount < auction.current_bid + item.minimum_increment) {
-    throw new Error(`Minimum increment is ${item.minimum_increment} TC`);
-  }
-
-  // Check team budget
-  const { data: team, error: teamError } = await supabase
-    .from('teams')
-    .select('current_budget')
-    .eq('id', teamId)
-    .single();
-
-  if (teamError || !team) throw new Error('Team not found');
-  if (team.current_budget < amount) {
-    throw new Error('Insufficient Tech Coins');
-  }
-
-  // Atomic upsert on (auction_id, team_id) — requires the unique index from
-  // migration 007. Replaces the old select-then-insert/update, which both raced
-  // between teams and crashed with PGRST116 ("Cannot coerce the result to a
-  // single JSON object") when a team raised a bid (no UPDATE policy on bids).
-  const { data: bid, error: bidError } = await supabase
-    .from('bids')
-    .upsert(
-      { auction_id: auctionId, team_id: teamId, amount, is_valid: true },
-      { onConflict: 'auction_id,team_id' }
-    )
-    .select()
-    .single();
-
-  if (bidError) {
-    const code = (bidError as any).code;
-    if (code === '23505') throw new Error('Bid conflict — another bid just landed. Try again.');
-    if (code === '42501') throw new Error('You are not allowed to modify this bid.');
-    throw new Error(bidError.message || 'Failed to record bid');
-  }
-
-  // Update auction current bid — guarded so only a bid ABOVE the stored
-  // current_bid can land. This closes the race where two teams bid
-  // near-simultaneously: both passed validation against the same stale
-  // current_bid and whichever update landed last used to overwrite the higher
-  // bid (root cause of "admin shows team A as winner, question went to B").
-  // RLS can also silently reject (0 rows, no error) when the auction closes
-  // mid-bid — the team must not be told the bid succeeded then either.
-  const { data: updated, error: updateError } = await supabase
-    .from('auctions')
-    .update({
-      current_bid: amount,
-      current_team_id: teamId,
-    })
-    .eq('id', auctionId)
-    .eq('status', 'open')
-    .lt('current_bid', amount)
-    .select('id');
-
-  if (updateError) throw new Error(`Failed to update auction: ${updateError.message}`);
-  if (!updated || updated.length === 0) {
-    // Our update lost the race or the auction closed — find out which.
-    const { data: current } = await supabase
-      .from('auctions')
-      .select('status, current_bid')
-      .eq('id', auctionId)
-      .single();
-    // Withdraw the losing bid so it can never win the tie-break later.
-    await supabase
-      .from('bids')
-      .update({ is_valid: false })
-      .eq('auction_id', auctionId)
-      .eq('team_id', teamId)
-      .eq('amount', amount);
-    if (current?.status !== 'open') {
-      throw new Error('Bid no longer accepted — the auction just closed.');
+  const res = data as {
+    ok: boolean; error?: string; amount?: number;
+    current_bid?: number; minimum_increment?: number;
+  };
+  if (!res?.ok) {
+    switch (res?.error) {
+      case 'bidding_closed':
+        throw new Error('Bidding is over for this item — the round is being settled.');
+      case 'insufficient_budget':
+        throw new Error('Insufficient Tech Coins');
+      case 'bid_too_low':
+        throw new Error(`Bid must be higher than current bid of ${res.current_bid} TC`);
+      case 'below_minimum_increment':
+        throw new Error(`Minimum increment is ${res.minimum_increment} TC`);
+      case 'not_a_team_member':
+        throw new Error('Your account is not linked to a team');
+      case 'invalid_amount':
+        throw new Error('Enter a valid bid amount');
+      default:
+        throw new Error('Failed to place bid');
     }
-    throw new Error(`Outbid! Current bid is now ${current?.current_bid ?? amount} TC — bid higher.`);
   }
 
-  return bid as Bid;
+  return res.amount ?? amount;
 }
 
 export async function getBidsForAuction(auctionId: string): Promise<Bid[]> {
@@ -393,6 +345,11 @@ export async function getBidsForAuction(auctionId: string): Promise<Bid[]> {
     .from('bids')
     .select('*')
     .eq('auction_id', auctionId)
+    // Only bids that actually count. Withdrawn rows (a bid that lost the race
+    // for the auction row, or came in after the round settled) must never show
+    // up in the admin feed / projector — that was the "last bid shown, someone
+    // else got the question" confusion.
+    .eq('is_valid', true)
     .order('amount', { ascending: false });
 
   if (error) throw error;
@@ -511,6 +468,23 @@ export async function submitTeamAnswer(
     reward: res.reward ?? 0,
     bidLost: res.bid_lost ?? 0,
   };
+}
+
+/**
+ * The newest graded-answer announcement. Written by settle_answer() the moment
+ * a question is settled (team auto-verify OR quizmaster override) and mirrored
+ * to every panel over realtime.
+ */
+export async function getLatestRoundResult(): Promise<RoundResult | null> {
+  const { data, error } = await supabase
+    .from('round_results')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) return null;
+  return data as RoundResult | null;
 }
 
 export async function getAttemptsForAuction(auctionId: string): Promise<QuestionAttempt[]> {

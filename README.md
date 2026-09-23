@@ -77,9 +77,12 @@ flowchart LR
 | Sees | Everything, including the answer key | Item, bids, own attempt | Item, bids, MCQ options — no answers |
 
 Every screen ticks from the **same clock** and settles from the **same transaction**.
-That's not a slogan — it's the whole architecture:
+That's not a slogan — it's the whole architecture. When a question is graded, all
+three screens are told at the same moment: the admin panel and every team dashboard
+flash an instant verdict toast, and the projector throws the result full-screen
+across the hall (`CORRECT! · TEAM NAME · +500 TC`).
 
-## 🧠 Under the hood — three hard problems, three permanent fixes
+## 🧠 Under the hood — five hard problems, five permanent fixes
 
 <details>
 <summary><b>⚖️ Problem 1: "Admin says team A won, the question went to B"</b></summary>
@@ -98,11 +101,11 @@ sequenceDiagram
     participant T as Team panel
     participant D as Projector
     participant DB as Postgres
-    Note over DB: bidding_ends_at passes
+    Note over DB: bidding_ends_at + 2s buzzer grace passes
     A->>DB: close_bidding(id, force=false)
     T->>DB: close_bidding(id, force=false)
     D->>DB: close_bidding(id, force=false)
-    Note over DB: first caller wins the row lock,<br/>others get the stored outcome
+    Note over DB: first caller wins the row lock,<br/>the others get the stored outcome
     DB-->>A: winner: Team B, 240 TC
     DB-->>T: winner: Team B, 240 TC
     DB-->>D: winner: Team B, 240 TC
@@ -124,14 +127,63 @@ of `(deadline − serverNow)`: monotonic, and identical on every device in the h
 <summary><b>💸 Problem 3: "Two teams bid at once and the lower bid won"</b></summary>
 
 Select-then-insert bid flows race; last-write-wins could resurrect an outbid value.
-**Fix:** bids upsert atomically on a unique `(auction, team)` index; the auction's
-`current_bid` update is **guarded** (`.lt('current_bid', amount)`) so only a genuinely
-higher bid can land — a loser's update matches zero rows, the bid is withdrawn
-(`is_valid = false`), and the team gets a real "outbid" message instead of a phantom win.
+**Fix:** bids go through the `place_bid()` RPC — one transaction that locks the
+auction row, validates status / deadline / budget / minimum increment, upserts the
+bid on the unique `(auction, team)` index and moves `current_bid` in the same breath.
+The team is identified from the JWT (never the request body), so a client cannot bid
+as someone else, and the caller gets a precise reason when a bid is refused.
 </details>
 
 <details>
-<summary><b>🎓 Problem 4: the quizmaster becomes a grading bottleneck</b></summary>
+<summary><b>⚡ Problem 4: "A team bid with 2 seconds left and the question went to the second-last bidder"</b></summary>
+
+This was the nastiest one the hall produced. Placing a bid used to take three client
+round-trips (read → store bid → update the auction), and at the buzzer the round
+settlement could land **between** step two and step three: `close_bidding()` locked
+the auction, read the bids it could see, crowned the *second-last* bidder — while the
+late bid row was already stored, so the admin's live feed showed a higher bid that
+never won.
+
+**Fix, in two parts:**
+
+1. **Serialise the two.** `place_bid()` takes the *same* `FOR UPDATE` row lock as
+   `close_bidding()`. They can no longer interleave — the bid is either counted by
+   the settlement or refused outright, never left behind as a ghost row (the live
+   bid feed also filters to `is_valid = true`).
+2. **Honour the buzzer.** A bid clicked with 1–3s on the clock reaches the server a
+   moment later (network + processing). Bids are therefore accepted for a **2s grace**
+   past the deadline, and the auto-close waits the same 2s before settling — the last
+   bidder wins and the deadline stays honest for everyone. Every client retries the
+   (idempotent) close until the server's grace has elapsed.
+
+```mermaid
+sequenceDiagram
+    participant T as Team (buzzer bid, 1s left)
+    participant C as close_bidding (expired)
+    participant DB as Postgres
+    C->>DB: lock auction row (FOR UPDATE)
+    T->>DB: place_bid(200) — waits on the same row
+    DB-->>C: settled: Team B 175 TC
+    T->>DB: …lock acquired, sees status <> 'open'
+    DB-->>T: bidding_closed (no ghost row stored)
+    Note over DB: reverse order → the buzzer bid<br/>commits first and wins the round
+```
+</details>
+
+<details>
+<summary><b>📣 Problem 5: "Nobody knew whether the answer was right"</b></summary>
+
+The winning team saw its verdict, but the quizmaster's screen, the other teams and
+the audience were left guessing. **Fix:** `settle_answer()` writes one public row to
+`round_results` inside the settlement transaction, and every panel subscribes to that
+table over Realtime — admin toast, team toast, and a full-screen projector
+announcement (`CORRECT! / WRONG!`, the TC swing, the correct option on a miss, and
+whether it was auto-verified or quizmaster-graded). A last-result strip stays on all
+three screens after the toast fades. No polling, no refresh, one source of truth.
+</details>
+
+<details>
+<summary><b>🎓 Problem 6: the quizmaster becomes a grading bottleneck</b></summary>
 
 Hand-grading every MCQ stalls the show between rounds. **Fix:** when the winning
 team taps an option, a `submit_team_answer()` RPC compares it against the item's
@@ -180,6 +232,7 @@ npm install
    database/migrations/009_pin_get_server_time_search_path.sql
    database/migrations/010_anon_read_for_display_route.sql     # public projector reads
    database/migrations/011_leaderboard_ranks_and_auto_verified_mcq.sql  # true ranks + self-grading MCQs
+   database/migrations/012_atomic_bids_and_round_announcements.sql       # atomic bids, buzzer grace, result announcements
    ```
 
    All migrations are idempotent — safe to re-run.
@@ -219,21 +272,23 @@ src/
 │   └── display/      # DisplayPage — the hall's projector view
 ├── components/
 │   ├── layout/       # AdminLayout, TeamLayout
-│   ├── ui/           # Logo, modals, badges, animated numbers, spinners
+│   ├── ui/           # Logo, modals, badges, animated numbers, result announcements
 │   └── ...
 ├── hooks/
 │   ├── useAuth.tsx   # Auth context
-│   └── useRealtime.ts# Supabase Realtime subscriptions (auctions, bids, teams, settings)
+│   ├── useRealtime.ts# Supabase Realtime subscriptions (auctions, bids, teams, settings, results)
+│   ├── useAutoCloseBidding.ts  # Shared 60s deadline → idempotent settlement
+│   └── useRoundResults.ts      # Round verdicts → toast / projector announcement
 ├── lib/
 │   ├── supabase.ts   # Client
 │   ├── serverTime.ts # ⏱ Server-clock sync (half-RTT offset)
-│   ├── queries.ts    # All DB operations incl. closeBidding RPC wrapper
+│   ├── queries.ts    # All DB operations incl. placeBid / closeBidding / answer RPCs
 │   └── utils.ts
 ├── types/index.ts    # Domain types + difficulty presets
 └── index.css         # Tailwind 4 theme, neon glow, animations
 
 database/
-├── migrations/       # 001 → 010, ordered, idempotent
+├── migrations/       # 001 → 012, ordered, idempotent
 └── seed.sql          # Event settings + sample items
 ```
 

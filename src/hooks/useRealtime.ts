@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
-type TableName = 'auctions' | 'teams' | 'bids' | 'event_settings' | 'event_logs';
+type TableName = 'auctions' | 'teams' | 'bids' | 'event_settings' | 'event_logs' | 'round_results';
 
 interface RealtimeOptions {
   table: TableName;

@@ -1,5 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import toast from 'react-hot-toast';
 import { useAuth } from '../../hooks/useAuth';
+import { useAutoCloseBidding } from '../../hooks/useAutoCloseBidding';
+import { useRoundResults } from '../../hooks/useRoundResults';
 import {
   getActiveAuctionItems, getCurrentAuction, getTeams, getEventSettings,
   getRankings, startAuction, updateAuction,
@@ -8,7 +11,7 @@ import {
 } from '../../lib/queries';
 import { syncServerTime, serverNow, serverNowIso, remainingSeconds } from '../../lib/serverTime';
 import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
-import { Badge, ConfirmModal, Modal, LoadingSpinner } from '../../components/ui';
+import { Badge, ConfirmModal, Modal, LoadingSpinner, RoundResultStrip, RoundResultToast } from '../../components/ui';
 import { formatTime, getDifficultyColor } from '../../lib/utils';
 import type { TeamWithRank, AuctionItem, AuctionWithItem, EventSettings, Bid, QuestionAttempt } from '../../types';
 import { MCQ_KEYS } from '../../types';
@@ -133,24 +136,18 @@ export default function AdminLiveControl() {
     return () => clearInterval(interval);
   }, [timerRunning, biddingHasDeadline]);
 
-  // Auto-close: the first client to notice expiry settles the round through
-  // the atomic RPC (safe to race — it re-checks the deadline server-side and
-  // is idempotent, so admin + teams + display can all fire it at once).
-  const autoCloseRef = useRef<string | null>(null);
+  // Auto-close when the 60s window expires (shared with the team dashboards
+  // and the projector — idempotent RPC, safe to fire from every client).
+  useAutoCloseBidding(auction);
+
+  // Every graded answer — auto-verified by the database or marked by the
+  // quizmaster — arrives over realtime: a toast for the room, plus the strip
+  // below that keeps the verdict on screen after the round resets.
+  const { latest: lastResult, announcement: resultAnnouncement } = useRoundResults();
   useEffect(() => {
-    if (auction?.status !== 'open') { autoCloseRef.current = null; return; }
-    if (!biddingHasDeadline || biddingRemaining > 0 || !auction) return;
-    if (autoCloseRef.current === auction.id) return;
-    autoCloseRef.current = auction.id;
-    closeBidding(auction.id, false)
-      .then(res => {
-        if (!res?.ok && res?.error === 'not_expired') {
-          // Clock-skew guard: allow a retry shortly.
-          setTimeout(() => { autoCloseRef.current = null; }, 1500);
-        }
-      })
-      .catch(() => { autoCloseRef.current = null; });
-  }, [biddingHasDeadline, biddingRemaining, auction]);
+    if (!resultAnnouncement) return;
+    toast.custom(() => <RoundResultToast result={resultAnnouncement} />, { duration: 8000 });
+  }, [resultAnnouncement]);
 
   const currentLeader = auction?.current_team_id
     ? teams.find((t: any) => t.id === auction.current_team_id)
@@ -307,6 +304,14 @@ export default function AdminLiveControl() {
           </button>
         </div>
       </div>
+
+      {/* Last graded answer — stays visible after the round resets */}
+      {lastResult && (
+        <div className="card">
+          <h3 className="text-sm font-mono text-slate-500 mb-3 tracking-wider">LAST ROUND RESULT</h3>
+          <RoundResultStrip result={lastResult} />
+        </div>
+      )}
 
       {/* Live Auction Panel */}
       {auction ? (

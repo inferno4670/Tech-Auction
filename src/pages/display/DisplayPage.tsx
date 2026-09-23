@@ -1,15 +1,17 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  getRankings, getCurrentAuction, getEventSettings, getBidsForAuction, closeBidding
+  getRankings, getCurrentAuction, getEventSettings, getBidsForAuction
 } from '../../lib/queries';
 import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
-import { Badge, Logo } from '../../components/ui';
+import { useAutoCloseBidding } from '../../hooks/useAutoCloseBidding';
+import { useRoundResults } from '../../hooks/useRoundResults';
+import { Badge, Logo, RoundResultStrip, RoundResultOverlay } from '../../components/ui';
 import { AnimatedNumber } from '../../components/ui/AnimatedNumber';
 import { formatTime } from '../../lib/utils';
 import { syncServerTime, serverNow, remainingSeconds } from '../../lib/serverTime';
 import type { TeamWithRank, AuctionWithItem, EventSettings, Bid } from '../../types';
 import { MCQ_KEYS } from '../../types';
-import { Trophy, Clock, Gavel } from 'lucide-react';
+import { Trophy, Clock, Gavel, CheckCircle } from 'lucide-react';
 
 export default function DisplayPage() {
   const [rankings, setRankings] = useState<TeamWithRank[]>([]);
@@ -94,20 +96,12 @@ export default function DisplayPage() {
   }, [timerRunning, biddingHasDeadline]);
 
   // The display can also settle the round when the 60s window expires.
-  const autoCloseRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (auction?.status !== 'open') { autoCloseRef.current = null; return; }
-    if (!biddingHasDeadline || biddingRemaining > 0 || !auction) return;
-    if (autoCloseRef.current === auction.id) return;
-    autoCloseRef.current = auction.id;
-    closeBidding(auction.id, false)
-      .then(res => {
-        if (!res?.ok && res?.error === 'not_expired') {
-          setTimeout(() => { autoCloseRef.current = null; }, 1500);
-        }
-      })
-      .catch(() => { autoCloseRef.current = null; });
-  }, [biddingHasDeadline, biddingRemaining, auction]);
+  useAutoCloseBidding(auction);
+
+  // Verdict announcements: settle_answer() writes one round_results row per
+  // graded answer, so the projector shows the outcome to the whole room the
+  // moment it happens — auto-verified or quizmaster-graded alike.
+  const { latest: lastResult, announcement: resultAnnouncement } = useRoundResults(10000);
 
   if (loading) {
     return (
@@ -124,6 +118,9 @@ export default function DisplayPage() {
 
   return (
     <div className="min-h-screen bg-dark-900 grid-bg p-8 overflow-hidden">
+      {/* Round verdict — full-screen for the room */}
+      {resultAnnouncement && <RoundResultOverlay result={resultAnnouncement} />}
+
       {/* Background effects */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1200px] h-[400px] bg-cyan-500/3 rounded-full blur-[150px]" />
@@ -340,6 +337,17 @@ export default function DisplayPage() {
                 </div>
               )}
             </div>
+
+            {/* Last graded answer — the room keeps the verdict in view */}
+            {lastResult && (
+              <div className="card mt-6">
+                <div className="flex items-center gap-2 mb-3">
+                  <CheckCircle className={lastResult.result === 'correct' ? 'text-green-400' : 'text-red-400'} size={18} />
+                  <h3 className="text-lg font-bold text-slate-900">LAST ANSWER</h3>
+                </div>
+                <RoundResultStrip result={lastResult} />
+              </div>
+            )}
           </div>
         </div>
 

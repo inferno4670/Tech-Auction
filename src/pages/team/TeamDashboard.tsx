@@ -1,12 +1,15 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import toast from 'react-hot-toast';
 import { useAuth } from '../../hooks/useAuth';
+import { useAutoCloseBidding } from '../../hooks/useAutoCloseBidding';
+import { useRoundResults } from '../../hooks/useRoundResults';
 import { getTeamForUser } from '../../lib/auth';
 import {
   getRankings, getCurrentAuction, getEventSettings, placeBid, getBidsForAuction,
-  submitTeamAnswer, getAttemptsForAuction, closeBidding, type SubmitAnswerResult
+  submitTeamAnswer, getAttemptsForAuction, type SubmitAnswerResult
 } from '../../lib/queries';
 import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
-import { StatCard, Badge, LoadingSpinner } from '../../components/ui';
+import { StatCard, Badge, LoadingSpinner, RoundResultStrip, RoundResultToast } from '../../components/ui';
 import { AnimatedNumber } from '../../components/ui/AnimatedNumber';
 import { formatTime, getDifficultyColor } from '../../lib/utils';
 import { syncServerTime, serverNow, remainingSeconds } from '../../lib/serverTime';
@@ -149,20 +152,18 @@ export default function TeamDashboard() {
 
   // First client to notice expiry settles the round via the atomic RPC
   // (idempotent + deadline re-checked server-side, so racing callers are safe).
-  const autoCloseRef = useRef<string | null>(null);
+  useAutoCloseBidding(auction);
+
+  // Round verdicts for EVERYONE, not just the team at the podium: the instant
+  // a question is graded (auto-verified or quizmaster-marked), each dashboard
+  // flashes the outcome. The winning team already sees its own big verdict
+  // banner, so it is skipped here to avoid a double notification.
+  const { latest: lastResult, announcement: resultAnnouncement } = useRoundResults();
   useEffect(() => {
-    if (auction?.status !== 'open') { autoCloseRef.current = null; return; }
-    if (!biddingHasDeadline || biddingRemaining > 0 || !auction) return;
-    if (autoCloseRef.current === auction.id) return;
-    autoCloseRef.current = auction.id;
-    closeBidding(auction.id, false)
-      .then(res => {
-        if (!res?.ok && res?.error === 'not_expired') {
-          setTimeout(() => { autoCloseRef.current = null; }, 1500);
-        }
-      })
-      .catch(() => { autoCloseRef.current = null; });
-  }, [biddingHasDeadline, biddingRemaining, auction]);
+    if (!resultAnnouncement) return;
+    if (team && resultAnnouncement.team_id === team.id) return;
+    toast.custom(() => <RoundResultToast result={resultAnnouncement} />, { duration: 8000 });
+  }, [resultAnnouncement, team]);
 
 
   if (loading) {
@@ -274,7 +275,10 @@ export default function TeamDashboard() {
     setBidError('');
     setBidLoading(true);
     try {
-      await placeBid(auction.id, team.id, amount);
+      // Atomic server-side bid: the RPC takes the same row lock as the round
+      // settlement, so a last-second bid either wins outright or is refused —
+      // it can no longer be shown as a bid that never counted.
+      await placeBid(auction.id, amount);
       setBidAmount(0);
     } catch (err: any) {
       setBidError(err.message || 'Failed to place bid');
@@ -355,6 +359,14 @@ export default function TeamDashboard() {
             </div>
           </div>
         )
+      )}
+
+      {/* Last graded answer — every team sees the result of the round */}
+      {lastResult && (
+        <div className="card">
+          <h3 className="text-sm font-mono text-slate-500 mb-3 tracking-wider">LAST ROUND RESULT</h3>
+          <RoundResultStrip result={lastResult} />
+        </div>
       )}
 
       {/* Stats Row */}
