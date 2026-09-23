@@ -6,14 +6,14 @@ import { useRoundResults } from '../../hooks/useRoundResults';
 import { getTeamForUser } from '../../lib/auth';
 import {
   getRankings, getCurrentAuction, getEventSettings, placeBid, getBidsForAuction,
-  submitTeamAnswer, getAttemptsForAuction, type SubmitAnswerResult
+  submitTeamAnswer, getAttemptsForAuction, getBudgetTransactions, type SubmitAnswerResult
 } from '../../lib/queries';
 import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
 import { StatCard, Badge, LoadingSpinner, RoundResultStrip, RoundResultToast } from '../../components/ui';
 import { AnimatedNumber } from '../../components/ui/AnimatedNumber';
 import { formatTime, getDifficultyColor } from '../../lib/utils';
 import { syncServerTime, serverNow, remainingSeconds } from '../../lib/serverTime';
-import type { Team, TeamWithRank, AuctionWithItem, EventSettings, Bid, QuestionAttempt } from '../../types';
+import type { Team, TeamWithRank, AuctionWithItem, EventSettings, Bid, BudgetTransaction, QuestionAttempt } from '../../types';
 import { MCQ_KEYS } from '../../types';
 import {
   Coins, Trophy, Medal, Gavel, Zap, AlertCircle,
@@ -41,6 +41,9 @@ export default function TeamDashboard() {
   const [bidLoading, setBidLoading] = useState(false);
   // const [connectionStatus, setConnectionStatus] = useState<'live' | 'reconnecting' | 'offline'>('live');
   const [bids, setBids] = useState<Bid[]>([]);
+  // Admin TC add/deducts with the quizmaster's reason — shown to the team so
+  // a budget change is never unexplained.
+  const [tcAdjustments, setTcAdjustments] = useState<BudgetTransaction[]>([]);
   const [myAttempt, setMyAttempt] = useState<QuestionAttempt | null>(null);
   const [answerLoading, setAnswerLoading] = useState(false);
   const [answerError, setAnswerError] = useState('');
@@ -72,6 +75,15 @@ export default function TeamDashboard() {
       // If a newer load has started, discard this one's results
       if (!mountedRef.current || myLoadId !== loadIdRef.current) return;
       setTeam(t);
+      // Manual TC adjustments (admin add/deduct + reason) — non-blocking so
+      // a slow ledger never delays the dashboard's first paint.
+      if (t) {
+        getBudgetTransactions(t.id)
+          .then(tx => {
+            if (mountedRef.current && myLoadId === loadIdRef.current) setTcAdjustments(tx);
+          })
+          .catch(() => { /* keep the last adjustments we loaded */ });
+      }
       setRankings(r);
       setAuction(auctionData);
       setSettings(s);
@@ -397,6 +409,28 @@ export default function TeamDashboard() {
           icon={<Gavel size={16} />}
         />
       </div>
+
+      {/* Manual TC adjustments — the quizmaster's reason, visible to the team */}
+      {tcAdjustments.length > 0 && (
+        <div className="card">
+          <h3 className="text-sm font-mono text-slate-500 mb-3 tracking-wider">TC ADJUSTMENTS</h3>
+          <div className="space-y-2">
+            {tcAdjustments.map(tx => (
+              <div key={tx.id} className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className={`text-sm font-mono font-bold ${tx.amount >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                    {tx.amount >= 0 ? '+' : ''}{tx.amount} TC
+                  </p>
+                  <p className="text-xs text-slate-500 break-words">{tx.reason}</p>
+                </div>
+                <span className="text-xs text-slate-400 font-mono shrink-0">
+                  {new Date(tx.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Current Auction Panel */}
       {auction && (auction.status === 'open' || auction.status === 'question' || auction.status === 'closed') && (

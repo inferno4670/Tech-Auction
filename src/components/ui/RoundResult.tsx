@@ -43,11 +43,11 @@ export function RoundResultToast({ result }: { result: RoundResult }) {
           {correct ? ' — bid refunded + 150 TC bonus' : ' — bid lost'}
         </span>
       </p>
-      <p className="text-[11px] font-mono text-slate-500 mt-1">
+      <p className="mt-1 break-words text-[11px] font-mono text-slate-500">
         {result.item_name || 'Item'} · {sourceLabel(result)}
       </p>
       {!correct && result.correct_answer && (
-        <p className="text-[11px] font-mono text-amber-400 mt-1">
+        <p className="mt-1 break-words text-[11px] font-mono text-amber-400">
           Correct answer: {result.correct_answer}
         </p>
       )}
@@ -76,9 +76,9 @@ export function RoundResultOverlay({ result }: { result: RoundResult }) {
         <p className={cn('text-6xl font-black tracking-tight mb-3', correct ? 'text-green-400' : 'text-red-400')}>
           {correct ? 'CORRECT!' : 'WRONG!'}
         </p>
-        <p className="text-4xl font-bold text-slate-900 mb-6">{result.team_name || 'Team'}</p>
+        <p className="break-words text-4xl font-bold text-slate-900 mb-6">{result.team_name || 'Team'}</p>
 
-        <p className={cn('text-5xl font-mono font-black mb-8', correct ? 'text-cyan-400 text-glow-cyan' : 'text-red-400')}>
+        <p className={cn('break-words text-5xl font-mono font-black mb-8', correct ? 'text-cyan-400 text-glow-cyan' : 'text-red-400')}>
           {tcDelta(result)}
           <span className="text-xl text-slate-400 font-bold ml-3">
             {correct ? 'bid refunded + 150 TC bonus' : 'bid lost'}
@@ -86,12 +86,12 @@ export function RoundResultOverlay({ result }: { result: RoundResult }) {
         </p>
 
         {!correct && result.correct_answer && (
-          <p className="text-2xl font-mono text-amber-400 mb-6">
+          <p className="break-words text-2xl font-mono text-amber-400 mb-6">
             Correct answer: {result.correct_answer}
           </p>
         )}
 
-        <p className="text-sm font-mono text-slate-500 tracking-widest">
+        <p className="break-words text-sm font-mono text-slate-500 tracking-widest">
           {result.item_name || 'ITEM'} · {sourceLabel(result).toUpperCase()}
         </p>
       </div>
@@ -104,28 +104,31 @@ export function RoundResultStrip({ result, className }: { result: RoundResult; c
   const correct = result.result === 'correct';
 
   return (
-    <div className={cn('flex items-center justify-between gap-4', className)}>
+    // Two rows so nothing can ever collide or overflow a narrow card: the
+    // verdict line lets the team name truncate while the CORRECT/WRONG badge
+    // and the TC swing stay pinned (shrink-0); on a miss the correct answer
+    // gets its own full-width, word-breaking line below instead of being
+    // crammed inline where it used to overlap the verdict.
+    <div className={cn('space-y-1.5', className)}>
       <div className="flex items-center gap-2 min-w-0">
         {correct
           ? <CheckCircle className="text-green-400 shrink-0" size={16} />
           : <XCircle className="text-red-400 shrink-0" size={16} />}
-        <span className="font-bold text-sm text-slate-900 truncate">
+        <span className="min-w-0 truncate font-bold text-sm text-slate-900">
           {result.team_name || 'Team'}
         </span>
-        <span className={cn('text-xs font-mono font-bold', correct ? 'text-green-400' : 'text-red-400')}>
+        <span className={cn('shrink-0 text-xs font-mono font-bold', correct ? 'text-green-400' : 'text-red-400')}>
           {correct ? 'CORRECT' : 'WRONG'}
         </span>
-      </div>
-      <div className="flex items-center gap-3 shrink-0">
-        {!correct && result.correct_answer && (
-          <span className="text-xs font-mono text-amber-500 hidden md:inline">
-            ans: {result.correct_answer}
-          </span>
-        )}
-        <span className={cn('font-mono font-bold', correct ? 'text-cyan-400' : 'text-red-400')}>
+        <span className={cn('ml-auto shrink-0 font-mono font-bold', correct ? 'text-cyan-400' : 'text-red-400')}>
           {tcDelta(result)}
         </span>
       </div>
+      {!correct && result.correct_answer && (
+        <p className="break-words text-xs font-mono text-amber-500">
+          ans: {result.correct_answer}
+        </p>
+      )}
     </div>
   );
 }

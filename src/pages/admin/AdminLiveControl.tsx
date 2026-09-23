@@ -263,7 +263,13 @@ export default function AdminLiveControl() {
     try {
       const amount = tcMode === "add" ? tcAmount : -tcAmount;
       await adjustBudget(tcTeamId, amount, tcReason || (tcMode === "add" ? "Admin TC grant" : "Admin TC deduction"));
-      await logEvent("tc_adjusted", "team", tcTeamId, { amount, mode: tcMode, reason: tcReason });
+      // Log the SAME reason adjustBudget stored, so the audit trail shows a
+      // real reason even when the reason box was left empty.
+      await logEvent("tc_adjusted", "team", tcTeamId, {
+        amount,
+        mode: tcMode,
+        reason: tcReason || (tcMode === "add" ? "Admin TC grant" : "Admin TC deduction"),
+      });
       setShowTcModal(false);
       setTcTeamId("");
       setTcAmount(50);

@@ -72,8 +72,12 @@ export default function AdminLogs() {
                 </span>
               </div>
               {log.metadata && (
-                <p className="text-xs text-slate-500 font-mono truncate">
-                  {JSON.stringify(log.metadata)}
+                <p className="text-xs text-slate-500 font-mono break-words">
+                  {Object.entries(log.metadata)
+                    .map(([key, value]) =>
+                      `${key}: ${value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value)}`
+                    )
+                    .join('  ·  ')}
                 </p>
               )}
             </div>

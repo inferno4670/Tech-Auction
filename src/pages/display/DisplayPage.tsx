@@ -116,8 +116,11 @@ export default function DisplayPage() {
 
   const isFinalized = settings?.status === 'finalized';
 
+  // No overflow-hidden on the root: on short projector resolutions a full
+  // leaderboard used to be silently clipped. Content that doesn't fit now
+  // scrolls instead of falling out of bounds.
   return (
-    <div className="min-h-screen bg-dark-900 grid-bg p-8 overflow-hidden">
+    <div className="min-h-screen bg-dark-900 grid-bg p-8">
       {/* Round verdict — full-screen for the room */}
       {resultAnnouncement && <RoundResultOverlay result={resultAnnouncement} />}
 
@@ -138,14 +141,17 @@ export default function DisplayPage() {
             <Logo size={32} />
           </div>
           <div className="w-48 h-0.5 bg-gradient-to-r from-transparent via-cyan-500 to-transparent mx-auto" />
-          <p className="text-sm text-slate-500 font-mono mt-3 tracking-widest">
+          <p className="break-words text-sm text-slate-500 font-mono mt-3 tracking-widest">
             {settings?.event_name || 'NATIONAL LEVEL QUIZ COMPETITION'}
           </p>
         </div>
 
+        {/* min-w-0 on both columns lets the fr tracks resolve against the
+            viewport instead of their content's min-width, so long item or
+            team names wrap inside the grid instead of pushing it wider. */}
         <div className="grid grid-cols-3 gap-6">
           {/* Left: Current Auction */}
-          <div className="col-span-2">
+          <div className="col-span-2 min-w-0">
             {auction && auction.status !== 'completed' ? (
               <div className="card neon-border p-8">
                 {/* Auction Status */}
@@ -184,7 +190,7 @@ export default function DisplayPage() {
                 </div>
 
                 {/* Item Name */}
-                <h2 className="text-4xl font-black text-slate-900 tracking-tight mb-2">
+                <h2 className="break-words text-4xl font-black text-slate-900 tracking-tight mb-2">
                   {auction.item?.name}
                 </h2>
                 <p className="text-lg text-slate-400 mb-8">{auction.item?.category}</p>
@@ -210,11 +216,11 @@ export default function DisplayPage() {
                       {bids.slice(0, 8).map((bid) => {
                         const bidTeam = rankings.find(r => r.id === bid.team_id);
                         return (
-                          <div key={bid.id} className="flex items-center justify-between p-2 rounded-lg bg-dark-700">
-                            <span className="text-sm font-bold text-slate-900">
+                          <div key={bid.id} className="flex items-center justify-between gap-3 p-2 rounded-lg bg-dark-700">
+                            <span className="min-w-0 truncate text-sm font-bold text-slate-900">
                               {bidTeam?.name || 'Team'}
                             </span>
-                            <span className="text-lg font-mono font-bold text-cyan-400">
+                            <span className="shrink-0 text-lg font-mono font-bold text-cyan-400">
                               {bid.amount} TC
                             </span>
                           </div>
@@ -229,7 +235,7 @@ export default function DisplayPage() {
                     <p className="text-sm font-mono text-slate-500 mb-2">
                       {auction.status === 'question' ? 'ROUND WINNER' : 'CURRENT LEADER'}
                     </p>
-                    <p className="text-3xl font-bold text-slate-900">
+                    <p className="break-words text-3xl font-bold text-slate-900">
                       {rankings.find(r => r.id === auction.current_team_id)?.name || 'Team'}
                     </p>
                   </div>
@@ -239,7 +245,7 @@ export default function DisplayPage() {
                 {auction.status === 'question' && (
                   <div className="mt-8 p-6 bg-violet-500/5 border border-violet-500/20 rounded-xl">
                     <p className="text-sm font-mono text-violet-400 mb-3">QUESTION</p>
-                    <p className="text-xl text-slate-900 leading-relaxed">{auction.item?.question}</p>
+                    <p className="break-words text-xl text-slate-900 leading-relaxed">{auction.item?.question}</p>
                     {(() => {
                       const opts = (['option_a', 'option_b', 'option_c', 'option_d'] as const)
                         .map(k => auction.item?.[k])
@@ -253,7 +259,7 @@ export default function DisplayPage() {
                               <span className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center font-mono font-bold text-sm bg-dark-600 text-slate-500">
                                 {MCQ_KEYS[i]}
                               </span>
-                              <span className="flex-1 font-medium text-slate-900">{opt}</span>
+                              <span className="min-w-0 flex-1 break-words font-medium text-slate-900">{opt}</span>
                             </div>
                           ))}
                         </div>
@@ -279,7 +285,7 @@ export default function DisplayPage() {
           </div>
 
           {/* Right: Leaderboard */}
-          <div className="col-span-1">
+          <div className="col-span-1 min-w-0">
             <div className={`card ${isFinalized ? 'neon-border' : ''}`}>
               <div className="flex items-center gap-2 mb-4">
                 <Trophy className="text-amber-400" size={18} />
@@ -298,22 +304,22 @@ export default function DisplayPage() {
                         : 'bg-dark-700 border border-transparent'
                     }`}
                   >
-                    <div className="flex items-center gap-3">
-                      <span className={`text-lg font-mono font-bold w-8 ${
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className={`w-8 shrink-0 text-lg font-mono font-bold ${
                         team.rank === 1 ? 'text-amber-400' :
                         team.rank <= 4 ? 'text-cyan-400' : 'text-slate-600'
                       }`}>
                         {team.rank}
                       </span>
-                      <div>
-                        <p className={`font-bold ${
+                      <div className="min-w-0">
+                        <p className={`truncate font-bold ${
                           team.rank <= 4 ? 'text-slate-900' : 'text-slate-400'
                         }`}>
                           {team.name}
                         </p>
                       </div>
                     </div>
-                    <div className="text-right">
+                    <div className="shrink-0 text-right">
                       <p className={`text-xl font-mono font-bold ${
                         team.rank <= 4 ? 'text-slate-900' : 'text-slate-500'
                       }`}>

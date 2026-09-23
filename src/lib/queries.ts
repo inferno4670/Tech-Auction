@@ -12,6 +12,7 @@ import type {
   AuctionWithItem,
   QuestionAttempt,
   RoundResult,
+  BudgetTransaction,
 } from '../types';
 
 // ─── Event Settings ──────────────────────────────────────────────────────────
@@ -555,6 +556,24 @@ export async function adjustBudget(
       amount,
       reason,
     });
+}
+
+// Recent manual TC adjustments for a team (the admin's add/deduct together
+// with the reason entered at the time), newest first — surfaced on the team
+// dashboard so a budget change is never unexplained.
+export async function getBudgetTransactions(
+  teamId: string,
+  limit = 5
+): Promise<BudgetTransaction[]> {
+  const { data, error } = await supabase
+    .from('budget_transactions')
+    .select('*')
+    .eq('team_id', teamId)
+    .eq('type', 'manual_adjustment')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
 }
 
 // ─── Event Logs ──────────────────────────────────────────────────────────────
