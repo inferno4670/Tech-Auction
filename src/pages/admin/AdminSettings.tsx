@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import {
   getEventSettings, updateEventSettings, resetDemoMode,
-  getTeams, logEvent
+  getTeams, logEvent, clearEventLogs
 } from '../../lib/queries';
 import { supabase } from '../../lib/supabase';
 import { ConfirmModal, LoadingSpinner, Badge } from '../../components/ui';
@@ -19,6 +19,7 @@ export default function AdminSettings() {
   const [showResetFinalized, setShowResetFinalized] = useState(false);
   const [showDeleteRounds, setShowDeleteRounds] = useState(false);
   const [showDeleteTeams, setShowDeleteTeams] = useState(false);
+  const [showClearAudit, setShowClearAudit] = useState(false);
 
   // Local draft for text/number config fields. Inputs read from this so every
   // keystroke stays instant and focus is never lost (previously each keystroke
@@ -82,6 +83,22 @@ export default function AdminSettings() {
   const updateDraft = (patch: Partial<typeof draft>) => {
     setDraft(d => ({ ...d, ...patch }));
     queueSave(patch);
+  };
+
+  const handleClearAudit = async () => {
+    setSaving(true);
+    try {
+      // Intentionally not logged: the wipe itself must be able to empty the
+      // log — otherwise every clear would leave one entry behind forever.
+      await clearEventLogs();
+      setShowClearAudit(false);
+      toast.success('Audit history cleared');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to clear audit history: ' + (err as Error).message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDemoReset = async () => {
@@ -389,6 +406,26 @@ export default function AdminSettings() {
         </button>
       </div>
 
+      {/* Clear Audit History */}
+      <div className="card border border-red-500/30">
+        <h2 className="text-lg font-bold text-red-600 mb-4 flex items-center gap-2">
+          <Trash2 size={18} />
+          Clear Audit History
+        </h2>
+        <p className="text-sm text-slate-500 mb-4">
+          Permanently delete every audit log entry — settings changes, TC adjustments, grading, resets.
+          To remove a single entry instead, use the trash button on the Audit Log page. This cannot be undone.
+        </p>
+        <button
+          onClick={() => setShowClearAudit(true)}
+          className="btn-danger flex items-center gap-2"
+          disabled={saving}
+        >
+          <Trash2 size={16} />
+          CLEAR ALL AUDIT HISTORY
+        </button>
+      </div>
+
       <ConfirmModal
         isOpen={showDemoReset}
         onClose={() => setShowDemoReset(false)}
@@ -426,6 +463,16 @@ export default function AdminSettings() {
         title="Delete All Teams"
         message="This will permanently delete ALL teams, their auth accounts, and all related data (bids, scores, history). You will need to re-create teams and generate new credentials. This cannot be undone."
         confirmText="DELETE ALL TEAMS"
+        variant="danger"
+        loading={saving}
+      />
+      <ConfirmModal
+        isOpen={showClearAudit}
+        onClose={() => setShowClearAudit(false)}
+        onConfirm={handleClearAudit}
+        title="Clear Audit History"
+        message="This will permanently delete EVERY audit log entry — settings changes, TC adjustments, grading, resets. You can also delete single entries from the Audit Log page. This cannot be undone."
+        confirmText="CLEAR ALL HISTORY"
         variant="danger"
         loading={saving}
       />

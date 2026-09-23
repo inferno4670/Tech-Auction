@@ -645,10 +645,10 @@ export default function AdminLiveControl() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {rankings.slice(0, 8).map(team => (
             <div key={team.id} className={`p-3 rounded-lg ${
-              team.rank <= 4 ? 'bg-cyan-500/5 border border-cyan-500/10' : 'bg-dark-700 border border-dark-400'
+              team.rank <= 6 ? 'bg-cyan-500/5 border border-cyan-500/10' : 'bg-dark-700 border border-dark-400'
             }`}>
               <div className="flex items-center justify-between mb-1">
-                <span className={`text-xs font-mono font-bold ${team.rank <= 4 ? 'text-cyan-400' : 'text-slate-500'}`}>
+                <span className={`text-xs font-mono font-bold ${team.rank <= 6 ? 'text-cyan-400' : 'text-slate-500'}`}>
                   #{team.rank}
                 </span>
                 <span className="text-xs font-mono text-slate-900">{team.short_name}</span>

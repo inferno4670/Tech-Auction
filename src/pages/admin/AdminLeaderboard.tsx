@@ -62,9 +62,9 @@ export default function AdminLeaderboard() {
         </div>
       </div>
 
-      {/* Top 4 Podium */}
-      <div className="grid grid-cols-4 gap-4">
-        {rankings.slice(0, 4).map((team, idx) => (
+      {/* Top 6 Podium */}
+      <div className="grid grid-cols-6 gap-4">
+        {rankings.slice(0, 6).map((team, idx) => (
           <div key={team.id} className={`card text-center animate-scale-in ${
             idx === 0 ? 'neon-border glow-cyan' : 'neon-border'
           }`} style={{ animationDelay: `${idx * 100}ms` }}>
@@ -111,12 +111,12 @@ export default function AdminLeaderboard() {
             <tbody>
               {rankings.map(team => (
                 <tr key={team.id} className={`border-b border-dark-400/50 ${
-                  team.rank <= 4 ? 'bg-cyan-500/5' : ''
+                  team.rank <= 6 ? 'bg-cyan-500/5' : ''
                 }`}>
                   <td className="py-4 px-4">
                     <span className={`font-mono font-bold text-lg ${
                       team.rank === 1 ? 'text-amber-400' :
-                      team.rank <= 4 ? 'text-cyan-400' : 'text-slate-500'
+                      team.rank <= 6 ? 'text-cyan-400' : 'text-slate-500'
                     }`}>
                       #{team.rank}
                     </span>
@@ -140,8 +140,8 @@ export default function AdminLeaderboard() {
                     <span className="font-mono text-violet-400">{team.auctions_won}</span>
                   </td>
                   <td className="py-4 px-4 text-center">
-                    <Badge variant={isFinalized ? (team.qualified ? 'green' : 'red') : (team.rank <= 4 ? 'cyan' : 'default')}>
-                      {isFinalized ? (team.qualified ? 'QUALIFIED' : 'ELIMINATED') : (team.rank <= 4 ? 'IN TOP 4' : 'AT RISK')}
+                    <Badge variant={isFinalized ? (team.qualified ? 'green' : 'red') : (team.rank <= 6 ? 'cyan' : 'default')}>
+                      {isFinalized ? (team.qualified ? 'QUALIFIED' : 'ELIMINATED') : (team.rank <= 6 ? 'IN TOP 6' : 'AT RISK')}
                     </Badge>
                   </td>
                 </tr>

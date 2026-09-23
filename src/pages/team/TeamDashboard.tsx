@@ -399,7 +399,7 @@ export default function TeamDashboard() {
         <StatCard
           label="RANK"
           value={`#${myRank?.rank || '-'}`}
-          color={myRank && myRank.rank <= 4 ? 'green' : 'red'}
+          color={myRank && myRank.rank <= 6 ? 'green' : 'red'}
           icon={<Medal size={16} />}
         />
         <StatCard
@@ -657,7 +657,7 @@ export default function TeamDashboard() {
               <XCircle className="mx-auto text-slate-500 mb-4" size={48} />
               <h2 className="text-2xl font-bold text-slate-400 mb-2">ROUND COMPLETE</h2>
               <p className="text-lg text-slate-900">Final Rank: #{myRank?.rank}</p>
-              <p className="text-sm text-slate-500 mt-2">Top 4 teams qualified for the next round.</p>
+              <p className="text-sm text-slate-500 mt-2">Top 6 teams qualified for the next round.</p>
             </>
           )}
         </div>
@@ -714,12 +714,12 @@ export default function TeamDashboard() {
               key={t.id}
               className={`flex items-center justify-between py-2 px-3 rounded-lg ${
                 t.id === team.id ? 'bg-cyan-500/10 border border-cyan-500/20' :
-                t.rank <= 4 ? 'bg-dark-700' : 'bg-dark-800'
+                t.rank <= 6 ? 'bg-dark-700' : 'bg-dark-800'
               }`}
             >
               <div className="flex items-center gap-3">
                 <span className={`text-xs font-mono font-bold w-6 ${
-                  t.rank <= 4 ? 'text-cyan-400' : 'text-slate-600'
+                  t.rank <= 6 ? 'text-cyan-400' : 'text-slate-600'
                 }`}>
                   #{t.rank}
                 </span>

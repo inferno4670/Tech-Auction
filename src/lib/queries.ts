@@ -131,7 +131,7 @@ export async function getRankings(): Promise<TeamWithRank[]> {
   return sorted.map((team, index) => ({
     ...team,
     rank: index + 1,
-    qualified: index < 4,
+    qualified: index < 6,
   }));
 }
 
@@ -606,6 +606,23 @@ export async function getEventLogs(): Promise<EventLog[]> {
 
   if (error) throw error;
   return data as EventLog[];
+}
+
+// Delete one audit entry (targeted cleanup from the Audit Log page).
+export async function deleteEventLog(id: string): Promise<void> {
+  const { error } = await supabase.from('event_logs').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// Wipe the whole audit trail (Settings → Audit History). Deliberately does
+// NOT log itself: the wipe must be able to empty the log completely, so no
+// entry survives to document who pressed the button.
+export async function clearEventLogs(): Promise<void> {
+  const { error } = await supabase
+    .from('event_logs')
+    .delete()
+    .neq('id', '00000000-0000-0000-0000-000000000000');
+  if (error) throw error;
 }
 
 // ─── Demo Mode ───────────────────────────────────────────────────────────────

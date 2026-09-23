@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
-import { getEventLogs } from '../../lib/queries';
+import toast from 'react-hot-toast';
+import { getEventLogs, deleteEventLog } from '../../lib/queries';
 import { LoadingSpinner, Badge } from '../../components/ui';
 import type { EventLog } from '../../types';
-import { FileText, Filter } from 'lucide-react';
+import { FileText, Filter, Trash2 } from 'lucide-react';
 
 export default function AdminLogs() {
   const [logs, setLogs] = useState<EventLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     getEventLogs()
@@ -30,6 +32,21 @@ export default function AdminLogs() {
     if (action.includes('started') || action.includes('created') || action.includes('live')) return 'cyan';
     if (action.includes('closed') || action.includes('completed') || action.includes('finalized')) return 'violet';
     return 'default';
+  };
+
+  // Remove one specific audit entry (the Settings page holds the clear-all).
+  const handleDeleteLog = async (id: string) => {
+    setDeletingId(id);
+    try {
+      await deleteEventLog(id);
+      setLogs(prev => prev.filter(l => l.id !== id));
+      toast.success('Audit entry deleted');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to delete entry');
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   if (loading) {
@@ -84,6 +101,14 @@ export default function AdminLogs() {
             <span className="text-xs text-slate-600 font-mono shrink-0">
               {new Date(log.created_at).toLocaleTimeString()}
             </span>
+            <button
+              onClick={() => handleDeleteLog(log.id)}
+              disabled={deletingId === log.id}
+              className="text-slate-400 hover:text-red-500 transition-colors shrink-0 disabled:opacity-50"
+              title="Delete this entry"
+            >
+              <Trash2 size={14} />
+            </button>
           </div>
         ))}
 

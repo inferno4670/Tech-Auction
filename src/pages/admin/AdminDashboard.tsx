@@ -213,7 +213,7 @@ export default function AdminDashboard() {
                 >
                   <td className="py-3 px-4">
                     <span className={`font-mono font-bold ${
-                      team.rank <= 4 ? 'text-cyan-400' : 'text-slate-500'
+                      team.rank <= 6 ? 'text-cyan-400' : 'text-slate-500'
                     }`}>
                       #{team.rank}
                     </span>
@@ -222,7 +222,7 @@ export default function AdminDashboard() {
                     <div className="flex items-center gap-3">
                       <div className="relative">
                         <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
-                          team.rank <= 4
+                          team.rank <= 6
                             ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
                             : 'bg-dark-500 text-slate-500 border border-dark-400'
                         }`}>
@@ -247,10 +247,10 @@ export default function AdminDashboard() {
                     <span className="font-mono text-red-400">{team.wrong_answers}</span>
                   </td>
                   <td className="py-3 px-4 text-center">
-                    <Badge variant={team.rank <= 4 ? 'green' : 'default'}>
+                    <Badge variant={team.rank <= 6 ? 'green' : 'default'}>
                       {settings?.status === 'finalized'
                         ? (team.qualified ? 'QUALIFIED' : 'ELIMINATED')
-                        : (team.rank <= 4 ? 'IN POSITION' : 'AT RISK')}
+                        : (team.rank <= 6 ? 'IN POSITION' : 'AT RISK')}
                     </Badge>
                   </td>
                 </tr>

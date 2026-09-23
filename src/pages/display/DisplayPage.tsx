@@ -299,7 +299,7 @@ export default function DisplayPage() {
                   <div
                     key={team.id}
                     className={`flex items-center justify-between p-3 rounded-xl transition-all ${
-                      team.rank <= 4
+                      team.rank <= 6
                         ? 'bg-cyan-500/5 border border-cyan-500/10'
                         : 'bg-dark-700 border border-transparent'
                     }`}
@@ -307,13 +307,13 @@ export default function DisplayPage() {
                     <div className="flex items-center gap-3 min-w-0">
                       <span className={`w-8 shrink-0 text-lg font-mono font-bold ${
                         team.rank === 1 ? 'text-amber-400' :
-                        team.rank <= 4 ? 'text-cyan-400' : 'text-slate-600'
+                        team.rank <= 6 ? 'text-cyan-400' : 'text-slate-600'
                       }`}>
                         {team.rank}
                       </span>
                       <div className="min-w-0">
                         <p className={`truncate font-bold ${
-                          team.rank <= 4 ? 'text-slate-900' : 'text-slate-400'
+                          team.rank <= 6 ? 'text-slate-900' : 'text-slate-400'
                         }`}>
                           {team.name}
                         </p>
@@ -321,13 +321,13 @@ export default function DisplayPage() {
                     </div>
                     <div className="shrink-0 text-right">
                       <p className={`text-xl font-mono font-bold ${
-                        team.rank <= 4 ? 'text-slate-900' : 'text-slate-500'
+                        team.rank <= 6 ? 'text-slate-900' : 'text-slate-500'
                       }`}>
                         {team.score}
                       </p>
                       <p className="text-xs font-mono text-cyan-400">{team.current_budget} TC</p>
                     </div>
-                    {isFinalized && team.rank <= 4 && (
+                    {isFinalized && team.rank <= 6 && (
                       <Badge variant="green" className="ml-2">✓</Badge>
                     )}
                   </div>

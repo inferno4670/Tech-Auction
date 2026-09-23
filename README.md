@@ -29,7 +29,7 @@ answer the question attached to the item:
 > Bid high, answer wrong → your coins are **gone**.
 > Sit out too long → the market punishes you.
 
-Survive to the top 4 and you advance. Overbid greedily and you're funding everyone
+Survive to the top 6 and you advance. Overbid greedily and you're funding everyone
 else's scoreboard.
 
 ```
@@ -66,7 +66,7 @@ flowchart LR
 | **Wrong answer** | You lose exactly what you bid — no extra penalty |
 | **Inactivity** | 3 rounds without winning → automatic **−150 TC** |
 | **Difficulty presets** | `basic` 50 TC / `intermediate` 100 TC / `expert` 200 TC starting bids, with matching reward & penalty tiers |
-| **Qualification** | Top **4** of 8 teams advance (score → budget → correct answers tie-break) |
+| **Qualification** | Top **6** of 10–15 teams advance (score → budget → correct answers tie-break) |
 
 ## 🖥 Three screens, one truth
 
