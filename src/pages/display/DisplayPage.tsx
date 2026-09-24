@@ -169,8 +169,15 @@ export default function DisplayPage() {
                     </Badge>
                   </div>
                   {auction.status === 'open' && biddingHasDeadline && (
-                    <div className="flex items-center gap-2">
-                      <Gavel size={20} className={biddingRemaining <= 10 ? 'text-red-500' : 'text-cyan-400'} />
+                    <div
+                      title="Time left to bid — bids carry a 2s buzzer grace past zero"
+                      className={cn(
+                        'flex items-center gap-2 rounded-xl px-4 py-2 transition-all',
+                        biddingRemaining <= 0 && 'bg-red-500/10 ring-2 ring-red-500/50 urgency-glow',
+                        biddingRemaining > 0 && biddingRemaining <= 10 && 'bg-red-500/10 ring-2 ring-red-500/40 urgency-glow'
+                      )}
+                    >
+                      <Gavel size={20} className={biddingRemaining <= 10 ? 'text-red-500 urgency-tick' : 'text-cyan-400'} />
                       <span className={`text-3xl font-mono font-bold ${
                         biddingRemaining <= 10 ? 'text-red-500 animate-pulse-glow' : 'text-cyan-400'
                       }`}>

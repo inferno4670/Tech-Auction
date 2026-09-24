@@ -279,4 +279,52 @@
   .animate-count-pulse { animation: count-pulse 0.3s ease-out; }
   .animate-bid-flash { animation: bid-flash 1s ease-out; }
   .animate-float { animation: float 3s ease-in-out infinite; }
+
+  /* Countdown urgency — a soft red halo that breathes once per second so
+     the last 10s of bidding reads at a glance across the room. */
+  @keyframes urgency-glow {
+    0%, 100% { box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.30), 0 0 16px rgba(239, 68, 68, 0.18); }
+    50%      { box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.55), 0 0 30px rgba(239, 68, 68, 0.35); }
+  }
+  @keyframes urgency-tick {
+    0%, 100% { transform: scale(1); }
+    30%      { transform: scale(1.1); }
+  }
+  .urgency-glow { animation: urgency-glow 1s ease-in-out infinite; }
+  .urgency-tick { animation: urgency-tick 1s ease-in-out infinite; }
+
+  /* Landing page live background — drifting orbs, a light band sweeping the
+     grid, and TC sparks rising like a live ticker. */
+  @keyframes orb-drift-1 {
+    0%, 100% { transform: translate(-50%, 0) scale(1); }
+    50%      { transform: translate(-50%, 46px) scale(1.14); }
+  }
+  @keyframes orb-drift-2 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50%      { transform: translate(-64px, -32px) scale(0.92); }
+  }
+  @keyframes orb-drift-3 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50%      { transform: translate(52px, 34px) scale(1.12); }
+  }
+  @keyframes grid-sweep {
+    0%   { transform: translateY(-50vh); }
+    100% { transform: translateY(110vh); }
+  }
+  @keyframes spark-rise {
+    0%   { transform: translateY(0) translateX(0); opacity: 0; }
+    12%  { opacity: 0.7; }
+    85%  { opacity: 0.25; }
+    100% { transform: translateY(-92vh) translateX(34px); opacity: 0; }
+  }
+  .animate-orb-1 { animation: orb-drift-1 13s ease-in-out infinite; }
+  .animate-orb-2 { animation: orb-drift-2 17s ease-in-out infinite; }
+  .animate-orb-3 { animation: orb-drift-3 14s ease-in-out infinite; }
+  .animate-grid-sweep { animation: grid-sweep 10s linear infinite; }
+  .animate-spark { animation-name: spark-rise; animation-timing-function: linear; animation-iteration-count: infinite; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-orb-1, .animate-orb-2, .animate-orb-3, .animate-grid-sweep,
+    .animate-spark, .urgency-glow, .urgency-tick { animation: none; }
+  }
 }

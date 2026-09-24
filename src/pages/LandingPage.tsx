@@ -3,16 +3,56 @@ import { Shield, Users, Monitor, AlertTriangle } from 'lucide-react';
 import { isConfigured } from '../lib/supabase';
 import { Logo } from '../components/ui';
 
+/** Deterministic spark field — same on every load, no re-render churn. */
+const SPARKS = [
+  { left: '8%',  delay: '0s',   dur: '9s',  size: 5 },
+  { left: '21%', delay: '2.4s', dur: '11s', size: 4 },
+  { left: '34%', delay: '5.1s', dur: '8s',  size: 6 },
+  { left: '47%', delay: '1.2s', dur: '12s', size: 4 },
+  { left: '58%', delay: '6.8s', dur: '9s',  size: 5 },
+  { left: '69%', delay: '3.7s', dur: '10s', size: 4 },
+  { left: '80%', delay: '0.9s', dur: '8s',  size: 6 },
+  { left: '91%', delay: '4.5s', dur: '11s', size: 5 },
+];
+
 export default function LandingPage() {
   const navigate = useNavigate();
 
   return (
     <div className="min-h-screen bg-dark-900 grid-bg flex flex-col items-center justify-center relative overflow-hidden">
-      {/* Background effects */}
-      <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-cyan-500/5 rounded-full blur-[120px]" />
-        <div className="absolute bottom-0 left-1/3 w-[600px] h-[300px] bg-violet-500/5 rounded-full blur-[100px]" />
-        <div className="absolute top-1/2 right-0 w-[400px] h-[400px] bg-cyan-500/3 rounded-full blur-[80px]" />
+      {/* ── Live background ────────────────────────────────────────────────
+          Three layers, all pointer-events-none: drifting color orbs, a light
+          band that sweeps down the grid like a scanner, and TC sparks that
+          rise continuously — the page never sits still. Pure CSS, zero
+          re-renders. */}
+      <div className="fixed inset-0 pointer-events-none" aria-hidden="true">
+        {/* Layer 1 — drifting orbs */}
+        <div className="animate-orb-1 absolute top-[-10%] left-1/2 w-[900px] h-[450px] bg-cyan-500/8 rounded-full blur-[130px]" />
+        <div className="animate-orb-2 absolute bottom-[-15%] left-[12%] w-[650px] h-[350px] bg-violet-500/8 rounded-full blur-[110px]" />
+        <div className="animate-orb-3 absolute top-[30%] right-[-8%] w-[500px] h-[420px] bg-cyan-400/6 rounded-full blur-[100px]" />
+
+        {/* Layer 2 — scanning band riding the grid */}
+        <div className="animate-grid-sweep absolute inset-x-0 top-0 h-[38vh]">
+          <div className="w-full h-full bg-gradient-to-b from-transparent via-cyan-400/[0.05] to-transparent" />
+          <div className="absolute bottom-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-cyan-400/25 to-transparent" />
+        </div>
+
+        {/* Layer 3 — rising TC sparks */}
+        {SPARKS.map((s, i) => (
+          <div
+            key={i}
+            className="animate-spark absolute rounded-full bg-cyan-500/60"
+            style={{
+              left: s.left,
+              bottom: '-12px',
+              width: s.size,
+              height: s.size,
+              animationDelay: s.delay,
+              animationDuration: s.dur,
+              boxShadow: '0 0 8px rgba(6,182,212,0.45)',
+            }}
+          />
+        ))}
       </div>
 
       <div className="relative z-10 text-center px-6 animate-fade-in">

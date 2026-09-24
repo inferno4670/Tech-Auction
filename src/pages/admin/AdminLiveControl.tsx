@@ -342,7 +342,10 @@ export default function AdminLiveControl() {
                 <p className="text-sm text-slate-400">{auction.item.category}</p>
               </div>
               {auction.status === 'open' && biddingHasDeadline && (
-                <div className="text-right">
+                <div className={cn(
+                  'text-right rounded-xl px-4 py-2 transition-all',
+                  biddingRemaining <= 10 && 'bg-red-500/10 ring-2 ring-red-500/40 urgency-glow'
+                )}>
                   <p className="text-xs text-slate-500 font-mono mb-1">BIDDING ENDS IN</p>
                   <p className={`text-4xl font-mono font-bold ${
                     biddingRemaining <= 10 ? 'text-red-400 animate-pulse-glow' : 'text-cyan-400'

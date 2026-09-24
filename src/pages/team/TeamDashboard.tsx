@@ -148,10 +148,14 @@ export default function TeamDashboard() {
   useEffect(() => {
     if (!tcSignature || tcSignature === lastTcSignatureRef.current) return;
     lastTcSignatureRef.current = tcSignature;
+    // The timeout lives in a ref (not effect cleanup) so a second adjustment
+    // or a background refresh never cancels the pending hide — the message
+    // always clears ~2.5s after the change was noticed.
+    if (tcHideTimerRef.current) window.clearTimeout(tcHideTimerRef.current);
     setShowTcMessage(true);
-    const t = window.setTimeout(() => setShowTcMessage(false), MESSAGE_DISMISS_MS);
-    return () => window.clearTimeout(t);
+    tcHideTimerRef.current = window.setTimeout(() => setShowTcMessage(false), MESSAGE_DISMISS_MS);
   }, [tcSignature]);
+  const tcHideTimerRef = useRef<number | null>(null);
 
   // Realtime
   useAuctionRealtime(() => { if (mountedRef.current) loadData(); });
@@ -284,6 +288,42 @@ export default function TeamDashboard() {
       stateColor = 'text-amber-400';
     }
   }
+
+  // Question timer — rings the whole card when it reaches the final 5s, but
+  // never changes the text, badges or score colours inside it.
+  const questionUrgent = timerRunning && timeRemaining <= 5;
+  // Bidding countdown — highlight state for the shared chip renderer.
+  const biddingUrgent = auction?.status === 'open' && biddingHasDeadline && biddingRemaining > 0 && biddingRemaining <= 10;
+  const biddingClosing = auction?.status === 'open' && biddingHasDeadline && biddingRemaining <= 0;
+
+  const bidCountdown = biddingHasDeadline ? (
+    <span
+      title="Time left to bid — bids carry a 2s buzzer grace past zero"
+      className={cn(
+        'inline-flex items-center gap-2 rounded-lg px-3 py-1.5',
+        biddingClosing && 'bg-red-500/10 border border-red-500/40 text-red-500 urgency-glow',
+        !biddingClosing && biddingUrgent && 'bg-red-500/10 border border-red-500/40 text-red-400 urgency-glow',
+        !biddingClosing && !biddingUrgent && 'text-slate-500'
+      )}
+    >
+      <Clock size={14} className={biddingUrgent ? 'urgency-tick' : undefined} />
+      {biddingClosing ? 'CLOSING' : 'Bidding ends in'} {formatTime(biddingRemaining)}
+    </span>
+  ) : null;
+
+  const questionCountdown = (auction?.status === 'question' && auction.winning_team_id === team.id) ? (
+    <div className={cn(
+      'text-center p-3 rounded-xl transition-all',
+      questionUrgent ? 'bg-red-500/10 ring-2 ring-red-500/50 urgency-glow' : ''
+    )}>
+      <p className="text-xs font-mono text-slate-500 mb-1">TIME TO ANSWER</p>
+      <p className={`text-3xl font-mono font-bold ${
+        questionUrgent ? 'text-red-500 animate-pulse-glow' : 'text-violet-500'
+      }`}>
+        {timerRunning ? formatTime(timeRemaining) : auction.timer_paused ? 'PAUSED' : formatTime(timeRemaining)}
+      </p>
+    </div>
+  ) : null;
 
   // Calculate bid suggestions
   const minBid = auction
@@ -480,16 +520,8 @@ export default function TeamDashboard() {
               </div>
               <p className="text-sm text-slate-400">{auction.item?.category}</p>
             </div>
-            {auction.status === 'question' && auction.winning_team_id === team.id && (
-              <div className="text-right">
-                <p className="text-xs font-mono text-slate-500 mb-1">TIME TO ANSWER</p>
-                <p className={`text-3xl font-mono font-bold ${
-                  timeRemaining <= 5 && timerRunning ? 'text-red-500 animate-pulse-glow' : 'text-violet-500'
-                }`}>
-                  {timerRunning ? formatTime(timeRemaining) : auction.timer_paused ? 'PAUSED' : formatTime(timeRemaining)}
-                </p>
-              </div>
-            )}
+            {/* Question timer — card highlights when the final 5s begin */}
+            {questionCountdown}
           </div>
 
           {/* Bid Display */}
@@ -526,14 +558,8 @@ export default function TeamDashboard() {
                 ? `Wrong: -${auction.winning_bid} TC (bid lost)`
                 : 'Wrong: -bid TC'}
             </span>
-            {auction.status === 'open' && biddingHasDeadline && (
-              <span className={`flex items-center gap-2 ${
-                biddingRemaining <= 10 ? 'text-red-400 font-bold animate-pulse-glow' : 'text-slate-500'
-              }`}>
-                <Clock size={14} />
-                Bidding ends in {formatTime(biddingRemaining)}
-              </span>
-            )}
+            {/* Bidding countdown chip — red urgency ring in the last 10s */}
+            {bidCountdown}
           </div>
 
           {/* Bidding Controls (only when auction is open) */}
