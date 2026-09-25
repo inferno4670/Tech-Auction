@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { useTeamPresence } from '../../hooks/useRealtime';
-import { ConnectionStatus, Badge, Logo } from '../ui';
+import { Badge, Logo } from '../ui';
 import { LogOut } from 'lucide-react';
 
 export default function TeamLayout({ children }: { children: ReactNode }) {
@@ -28,7 +28,6 @@ export default function TeamLayout({ children }: { children: ReactNode }) {
           </div>
 
           <div className="flex items-center gap-4">
-            <ConnectionStatus status="live" />
             {team && (
               <Badge variant="cyan">{team.short_name}</Badge>
             )}

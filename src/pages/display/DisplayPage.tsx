@@ -372,7 +372,7 @@ export default function DisplayPage() {
         {/* Footer */}
         <div className="text-center mt-6">
           <p className="text-xs text-slate-700 font-mono">
-            TECH AUCTION — {settings?.event_name || 'Live Auction Quiz'}
+            {settings?.event_name || 'Live Auction Quiz'}
           </p>
         </div>
       </div>
