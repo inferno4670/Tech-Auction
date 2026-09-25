@@ -6,6 +6,7 @@ import {
 } from '../../lib/queries';
 import { useTeamRealtime, useEventSettingsRealtime } from '../../hooks/useRealtime';
 import { LoadingSpinner, Badge } from '../../components/ui';
+import TieBreakerPanel from '../../components/admin/TieBreakerPanel';
 import { formatCoins, downloadCSV, cn, podiumRowClass, podiumRankClass, podiumLabel } from '../../lib/utils';
 import type { TeamWithRank, EventSettings } from '../../types';
 import { TOP_QUALIFY_COUNT } from '../../types';
@@ -171,6 +172,9 @@ export default function AdminLeaderboard() {
           </div>
         ))}
       </div>
+
+      {/* Tie-breaker question — run the round that decides the tie */}
+      <TieBreakerPanel teams={rankings} onOrderChanged={loadData} />
 
       {/* Tie-breaker order — the quizmaster's ruling when teams are level */}
       <div className="card">

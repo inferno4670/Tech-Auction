@@ -1,7 +1,9 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
-type TableName = 'auctions' | 'teams' | 'bids' | 'event_settings' | 'event_logs' | 'round_results';
+type TableName =
+  | 'auctions' | 'teams' | 'bids' | 'event_settings' | 'event_logs' | 'round_results'
+  | 'tiebreak_sessions' | 'tiebreak_answers' | 'tiebreak_questions';
 
 interface RealtimeOptions {
   table: TableName;
@@ -59,6 +61,14 @@ export function useBidRealtime(auctionId: string | null, onChange: (payload: any
 
 export function useEventSettingsRealtime(onChange: (payload: any) => void, enabled = true) {
   useRealtimeTable({ table: 'event_settings', onChange, enabled });
+}
+
+// A tie-break lives in two places: the round itself (opened / won / closed) and
+// the answers landing in it. One hook covers both so a caller only refetches the
+// tie-break state once per event.
+export function useTiebreakRealtime(onChange: (payload: any) => void, enabled = true) {
+  useRealtimeTable({ table: 'tiebreak_sessions', onChange, enabled });
+  useRealtimeTable({ table: 'tiebreak_answers', onChange, enabled });
 }
 
 // Broadcast-based channel for ephemeral state (e.g., timer)

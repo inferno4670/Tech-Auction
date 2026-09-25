@@ -6,18 +6,25 @@ import { useRoundResults } from '../../hooks/useRoundResults';
 import { getTeamForUser } from '../../lib/auth';
 import {
   getRankings, getCurrentAuction, getEventSettings, placeBid, getBidsForAuction,
-  submitTeamAnswer, getAttemptsForAuction, getBudgetTransactions, type SubmitAnswerResult
+  submitTeamAnswer, getAttemptsForAuction, getBudgetTransactions,
+  getTiebreakState, submitTiebreakAnswer, type SubmitAnswerResult, type TiebreakSubmitResult
 } from '../../lib/queries';
-import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
+import {
+  useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime,
+  useTiebreakRealtime,
+} from '../../hooks/useRealtime';
 import { StatCard, Badge, LoadingSpinner, RoundResultStrip, RoundResultToast } from '../../components/ui';
 import { AnimatedNumber } from '../../components/ui/AnimatedNumber';
 import { formatTime, getDifficultyColor, cn, podiumRowClass, podiumRankClass, podiumLabel } from '../../lib/utils';
 import { syncServerTime, serverNow, remainingSeconds } from '../../lib/serverTime';
-import type { Team, TeamWithRank, AuctionWithItem, EventSettings, Bid, BudgetTransaction, QuestionAttempt } from '../../types';
+import type {
+  Team, TeamWithRank, AuctionWithItem, EventSettings, Bid, BudgetTransaction,
+  QuestionAttempt, McqKey, TiebreakState,
+} from '../../types';
 import { MCQ_KEYS, TOP_QUALIFY_COUNT } from '../../types';
 import {
   Coins, Trophy, Medal, Gavel, Zap, AlertCircle,
-  CheckCircle, XCircle, Timer, Clock
+  CheckCircle, XCircle, Timer, Clock, Swords
 } from 'lucide-react';
 
 /** How long a transient message stays on a team's screen before clearing. */
@@ -57,6 +64,17 @@ export default function TeamDashboard() {
   const [answerOutcome, setAnswerOutcome] = useState<
     (SubmitAnswerResult & { correctAnswer: string | null }) | null
   >(null);
+  // Tie-breaker round: the saved question the quizmaster put in front of this
+  // team, and this team's one shot at it.
+  const [tiebreak, setTiebreak] = useState<TiebreakState | null>(null);
+  const [tiebreakOutcome, setTiebreakOutcome] = useState<TiebreakSubmitResult | null>(null);
+  // Which option WE tapped. The server withholds picks from everyone while a
+  // round is live (so no team can eliminate an option by watching a rival), so
+  // our own choice is remembered locally until the round closes and the reveal
+  // carries it back.
+  const [tbPicked, setTbPicked] = useState<McqKey | null>(null);
+  const [tiebreakError, setTiebreakError] = useState('');
+  const [tiebreakLoading, setTiebreakLoading] = useState(false);
 
   const mountedRef = useRef(true);
   const loadIdRef = useRef(0); // prevents stale responses from overwriting fresh data
@@ -71,11 +89,12 @@ export default function TeamDashboard() {
     if (!user) return;
     const myLoadId = ++loadIdRef.current;
     try {
-      const [t, r, auctionData, s] = await Promise.all([
+      const [t, r, auctionData, s, tb] = await Promise.all([
         getTeamForUser(user.id),
         getRankings(),
         getCurrentAuction(),
         getEventSettings(),
+        getTiebreakState(),
       ]);
       // If a newer load has started, discard this one's results
       if (!mountedRef.current || myLoadId !== loadIdRef.current) return;
@@ -92,6 +111,7 @@ export default function TeamDashboard() {
       setRankings(r);
       setAuction(auctionData);
       setSettings(s);
+      setTiebreak(tb);
       if (auctionData) {
         try {
           const b = await getBidsForAuction(auctionData.id);
@@ -130,6 +150,10 @@ export default function TeamDashboard() {
 
   // A new auction clears the previous question's instant verdict.
   useEffect(() => { setAnswerOutcome(null); }, [auction?.id]);
+
+  // A new tie-breaker round clears the previous round's verdict. Keyed on the
+  // session, so starting another question resets the card.
+  useEffect(() => { setTiebreakOutcome(null); setTiebreakError(''); setTbPicked(null); }, [tiebreak?.session?.id]);
 
   // Every message on the team screen is transient: the instant verdict clears
   // itself a moment after it appears instead of stacking up on the dashboard.
@@ -171,6 +195,7 @@ export default function TeamDashboard() {
     }
     loadData();
   });
+  useTiebreakRealtime(() => { if (mountedRef.current) loadData(); });
 
   // Timers — derived from DB timestamps against the SERVER clock so every
   // panel ticks identically (fixes fast/slow drift and countdown jumps).
@@ -397,6 +422,49 @@ export default function TeamDashboard() {
     }
   };
 
+  // Tie-breaker round for THIS team, if one is addressing it. The server has
+  // already decided eligibility and whether an answer counts; this only renders
+  // it. While the round is open the state carries no picks — that is deliberate,
+  // so nobody can eliminate an option by watching a rival answer.
+  const tbSession = tiebreak?.session && tiebreak.session.eligible_team_ids.includes(team.id)
+    ? tiebreak.session
+    : null;
+  const tbQuestion = tbSession ? tiebreak?.question ?? null : null;
+  const tbOpen = tbSession?.status === 'open';
+  const tbMyAnswer = tiebreak?.answers.find(a => a.team_id === team.id) ?? null;
+  const tbWinner = tbSession?.winner_team_id ? tiebreak?.answers.find(a => a.team_id === tbSession.winner_team_id) : null;
+  const tbIWon = !!tbSession?.winner_team_id && tbSession.winner_team_id === team.id;
+  const tbOptions = tbQuestion
+    ? (MCQ_KEYS.map(k => ({
+        key: k,
+        text: (k === 'A' ? tbQuestion.option_a
+          : k === 'B' ? tbQuestion.option_b
+          : k === 'C' ? tbQuestion.option_c
+          : tbQuestion.option_d) ?? '',
+      })).filter(o => o.text.trim() !== ''))
+    : [];
+  const tbPickedKey: McqKey | null = tbPicked ?? ((tbMyAnswer?.selected_key ?? null) as McqKey | null);
+  const tbCorrectKey: McqKey | null = tbQuestion?.correct_key ?? null;
+  const tbLocked = !tbOpen || !!tbMyAnswer;
+
+  const handleTiebreakAnswer = async (key: McqKey) => {
+    if (!tbSession) return;
+    setTiebreakError('');
+    setTiebreakLoading(true);
+    try {
+      setTbPicked(key);
+      const outcome = await submitTiebreakAnswer(tbSession.id, key);
+      setTiebreakOutcome(outcome);
+      if (outcome.won) toast.success('CORRECT — you win the tie-breaker!');
+      loadData();
+    } catch (err: any) {
+      setTiebreakError(err.message || 'Failed to submit your answer');
+      loadData();
+    } finally {
+      setTiebreakLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Status Banner */}
@@ -448,6 +516,113 @@ export default function TeamDashboard() {
         <div className="card">
           <h3 className="text-sm font-mono text-slate-500 mb-3 tracking-wider">LAST ROUND RESULT</h3>
           <RoundResultStrip result={lastResult} />
+        </div>
+      )}
+
+      {/* Tie-breaker round — only the teams the quizmaster selected see this.
+          One tap, one shot, and the first correct answer takes it. */}
+      {tbSession && tbQuestion && (
+        <div className={cn(
+          'card',
+          tbOpen ? 'neon-border glow-violet' : tbIWon ? 'neon-border glow-green' : 'border border-slate-200'
+        )}>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div className="flex items-center gap-2">
+              <Swords className={tbOpen ? 'text-violet-500' : 'text-slate-500'} size={18} />
+              <h3 className="text-lg font-bold text-violet-500 tracking-wide">TIE-BREAKER</h3>
+            </div>
+            {tbOpen
+              ? <Badge variant="violet">FIRST CORRECT ANSWER WINS</Badge>
+              : tbIWon
+                ? <Badge variant="green">YOU WON THE TIE-BREAK</Badge>
+                : <Badge variant="default">ROUND OVER</Badge>}
+          </div>
+
+          <p className="text-slate-900 text-lg leading-relaxed mb-4">{tbQuestion.question}</p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {tbOptions.map(o => {
+              const mine = tbPickedKey === o.key;
+              const revealed = !tbOpen && tbCorrectKey !== null;
+              const isAnswer = revealed && tbCorrectKey === o.key;
+              const mineWrong = revealed && mine && !isAnswer;
+              return (
+                <button
+                  key={o.key}
+                  onClick={() => handleTiebreakAnswer(o.key)}
+                  disabled={tbLocked || tiebreakLoading}
+                  className={cn(
+                    'flex items-center gap-3 rounded-xl border p-4 text-left transition-all',
+                    isAnswer ? 'bg-green-500/15 border-green-500/50'
+                      : mineWrong ? 'bg-red-500/15 border-red-500/50'
+                      : mine ? 'bg-violet-500/15 border-violet-500/50'
+                      : 'bg-dark-700 border-dark-400 hover:border-violet-500/40 disabled:opacity-60'
+                  )}
+                >
+                  <span className={cn(
+                    'w-8 h-8 shrink-0 rounded-lg flex items-center justify-center font-mono font-bold text-sm',
+                    isAnswer ? 'bg-green-500 text-white'
+                      : mineWrong ? 'bg-red-500 text-white'
+                      : mine ? 'bg-violet-500 text-white' : 'bg-dark-600 text-slate-500'
+                  )}>
+                    {o.key}
+                  </span>
+                  <span className="flex-1 font-medium text-slate-900">{o.text}</span>
+                  {isAnswer && <CheckCircle className="text-green-400 shrink-0" size={18} />}
+                  {mineWrong && <XCircle className="text-red-400 shrink-0" size={18} />}
+                  {mine && tbOpen && <CheckCircle className="text-violet-500 shrink-0" size={18} />}
+                </button>
+              );
+            })}
+          </div>
+
+          {tbMyAnswer && tbOpen && (
+            tiebreakOutcome && !tiebreakOutcome.won ? (
+              <p className="text-sm font-mono text-red-400 mt-3 flex items-center gap-2">
+                <XCircle size={14} />
+                That was not the answer — your team is out of this tie-break. Waiting on the others.
+              </p>
+            ) : (
+              <p className="text-sm font-mono text-violet-400 mt-3 flex items-center gap-2">
+                <CheckCircle size={14} />
+                Answer locked in — waiting for the other teams. One answer per team.
+              </p>
+            )
+          )}
+
+          {!tbOpen && (
+            <div className={cn(
+              'mt-4 flex items-start gap-3 rounded-xl border p-4',
+              tbIWon ? 'border-green-500/40 bg-green-500/10' : 'border-slate-200 bg-slate-50'
+            )}>
+              {tbIWon
+                ? <Trophy className="text-amber-400 shrink-0" size={22} />
+                : <XCircle className="text-slate-400 shrink-0" size={22} />}
+              <div>
+                <p className={cn('font-bold', tbIWon ? 'text-green-400' : 'text-slate-900')}>
+                  {tbIWon
+                    ? 'You answered first — the tie-break goes your way.'
+                    : `${tbWinner?.team_name || 'Another team'} answered first.`}
+                </p>
+                {tiebreakOutcome && !tiebreakOutcome.won && (
+                  <p className="text-sm text-slate-600 mt-0.5">
+                    {tbPickedKey
+                      ? `Your pick (${tbPickedKey}) was not the answer — one attempt per team.`
+                      : 'Another team got there first — one attempt per team.'}
+                  </p>
+                )}
+                {tbCorrectKey && (
+                  <p className="text-xs text-slate-500 font-mono mt-1">
+                    Correct answer: {tbCorrectKey}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {tiebreakError && (
+            <p className="text-red-400 text-sm font-mono mt-2">{tiebreakError}</p>
+          )}
         </div>
       )}
 

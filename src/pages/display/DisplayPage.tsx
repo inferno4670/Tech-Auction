@@ -1,17 +1,20 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  getRankings, getCurrentAuction, getEventSettings, getBidsForAuction
+  getRankings, getCurrentAuction, getEventSettings, getBidsForAuction, getTiebreakState
 } from '../../lib/queries';
-import { useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime } from '../../hooks/useRealtime';
+import {
+  useAuctionRealtime, useTeamRealtime, useEventSettingsRealtime, useBidRealtime,
+  useTiebreakRealtime,
+} from '../../hooks/useRealtime';
 import { useAutoCloseBidding } from '../../hooks/useAutoCloseBidding';
 import { useRoundResults } from '../../hooks/useRoundResults';
 import { Badge, Logo, RoundResultStrip, RoundResultOverlay } from '../../components/ui';
 import { AnimatedNumber } from '../../components/ui/AnimatedNumber';
 import { formatTime, cn, podiumRowClass, podiumRankClass, podiumLabel } from '../../lib/utils';
 import { syncServerTime, serverNow, remainingSeconds } from '../../lib/serverTime';
-import type { TeamWithRank, AuctionWithItem, EventSettings, Bid } from '../../types';
+import type { TeamWithRank, AuctionWithItem, EventSettings, Bid, TiebreakState } from '../../types';
 import { MCQ_KEYS, TOP_QUALIFY_COUNT } from '../../types';
-import { Trophy, Clock, Gavel, CheckCircle } from 'lucide-react';
+import { Trophy, Clock, Gavel, CheckCircle, Swords } from 'lucide-react';
 
 export default function DisplayPage() {
   const [rankings, setRankings] = useState<TeamWithRank[]>([]);
@@ -19,6 +22,9 @@ export default function DisplayPage() {
   const [settings, setSettings] = useState<EventSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [bids, setBids] = useState<Bid[]>([]);
+  // The live tie-breaker round, if one is running (or just finished). The public
+  // state carries no answer key and no picks while it is live.
+  const [tiebreak, setTiebreak] = useState<TiebreakState | null>(null);
 
   const mountedRef = useRef(true);
   const loadIdRef = useRef(0);
@@ -32,11 +38,14 @@ export default function DisplayPage() {
   const loadData = useCallback(async () => {
     const myLoadId = ++loadIdRef.current;
     try {
-      const [r, a, s] = await Promise.all([getRankings(), getCurrentAuction(), getEventSettings()]);
+      const [r, a, s, tb] = await Promise.all([
+        getRankings(), getCurrentAuction(), getEventSettings(), getTiebreakState(),
+      ]);
       if (!mountedRef.current || myLoadId !== loadIdRef.current) return;
       setRankings(r);
       setAuction(a);
       setSettings(s);
+      setTiebreak(tb);
       if (a) {
         try {
           const b = await getBidsForAuction(a.id);
@@ -73,6 +82,7 @@ export default function DisplayPage() {
     }
     loadData();
   });
+  useTiebreakRealtime(() => { if (mountedRef.current) loadData(); });
 
   // Timers — server-clock based so the projector ticks in lock-step with the
   // admin panel and every team dashboard.
@@ -117,6 +127,21 @@ export default function DisplayPage() {
 
   const isFinalized = settings?.status === 'finalized';
 
+  const tbSession = tiebreak?.session ?? null;
+  const tbQuestion = tiebreak?.question ?? null;
+  const tbOpen = tbSession?.status === 'open';
+  const tbAnswers = tiebreak?.answers ?? [];
+  const tbEligibleTeams = rankings.filter(t => tbSession?.eligible_team_ids.includes(t.id));
+  const tbOptions = tbQuestion
+    ? MCQ_KEYS.map(k => ({
+        key: k,
+        text: (k === 'A' ? tbQuestion.option_a
+          : k === 'B' ? tbQuestion.option_b
+          : k === 'C' ? tbQuestion.option_c
+          : tbQuestion.option_d) ?? '',
+      })).filter(o => o.text.trim() !== '')
+    : [];
+
   // No overflow-hidden on the root: on short projector resolutions a full
   // leaderboard used to be silently clipped. Content that doesn't fit now
   // scrolls instead of falling out of bounds.
@@ -132,6 +157,71 @@ export default function DisplayPage() {
       </div>
 
       <div className="relative z-10 max-w-[1400px] mx-auto">
+        {/* Tie-breaker — takes the whole room's attention while it runs */}
+        {tbSession && tbQuestion && (
+          <div className={cn(
+            'mb-8 rounded-2xl border p-8',
+            tbOpen ? 'border-violet-500/50 bg-violet-500/5' : 'border-slate-700 bg-dark-800'
+          )}>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+              <div className="flex items-center gap-3">
+                <Swords className={tbOpen ? 'text-violet-400' : 'text-slate-500'} size={26} />
+                <h2 className="text-2xl font-black text-slate-900 tracking-wide">TIE-BREAKER</h2>
+              </div>
+              {tbOpen
+                ? <Badge variant="violet">FIRST CORRECT ANSWER WINS</Badge>
+                : <Badge variant="green">{(tbSession.winner_team_name || 'NO WINNER').toUpperCase()} TAKES THE TIE-BREAK</Badge>}
+            </div>
+
+            <p className="break-words text-3xl font-bold text-slate-900 mb-6">{tbQuestion.question}</p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
+              {tbOptions.map(o => {
+                const isAnswer = !tbOpen && tbQuestion.correct_key === o.key;
+                return (
+                  <div key={o.key} className={cn(
+                    'flex items-center gap-3 rounded-xl border px-4 py-3',
+                    isAnswer ? 'border-green-500/50 bg-green-500/10' : 'border-slate-700 bg-dark-700'
+                  )}>
+                    <span className={cn(
+                      'w-9 h-9 shrink-0 rounded-lg flex items-center justify-center font-mono font-bold',
+                      isAnswer ? 'bg-green-500 text-white' : 'bg-dark-600 text-slate-400'
+                    )}>
+                      {o.key}
+                    </span>
+                    <span className="text-lg text-slate-900">{o.text}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {tbOpen ? (
+              <div className="flex flex-wrap gap-3">
+                {tbEligibleTeams.map(t => {
+                  const answered = tbAnswers.some(a => a.team_id === t.id);
+                  return (
+                    <div key={t.id} className={cn(
+                      'flex items-center gap-2 rounded-lg px-3 py-2 border font-mono text-sm',
+                      answered ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400'
+                        : 'border-slate-700 text-slate-500'
+                    )}>
+                      {answered && <CheckCircle size={14} />}
+                      {t.name}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              tbSession.winner_team_name && (
+                <div className="flex items-center gap-3">
+                  <Trophy className="text-amber-400" size={28} />
+                  <span className="text-2xl font-black text-amber-400">{tbSession.winner_team_name}</span>
+                </div>
+              )
+            )}
+          </div>
+        )}
+
         {/* Header */}
         <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-3 mb-2">

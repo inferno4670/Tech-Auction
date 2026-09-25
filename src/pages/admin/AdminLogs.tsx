@@ -31,6 +31,8 @@ export default function AdminLogs() {
     if (action.includes('wrong') || action.includes('delete') || action.includes('penalty')) return 'red';
     if (action.includes('started') || action.includes('created') || action.includes('live')) return 'cyan';
     if (action.includes('closed') || action.includes('completed') || action.includes('finalized')) return 'violet';
+    // Tie-breaker entries that are neither a start (cyan) nor a delete (red).
+    if (action.includes('tiebreak')) return 'violet';
     return 'default';
   };
 

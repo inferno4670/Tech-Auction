@@ -13,6 +13,9 @@ import type {
   QuestionAttempt,
   RoundResult,
   BudgetTransaction,
+  McqKey,
+  TiebreakQuestion,
+  TiebreakState,
 } from '../types';
 
 // ─── Event Settings ──────────────────────────────────────────────────────────
@@ -176,6 +179,163 @@ export async function setTiebreakOrder(teamIds: string[] | null, clear = false) 
     throw new Error('Failed to save the tie-breaker order');
   }
   return res;
+}
+
+// ─── Tie-Breaker Questions ───────────────────────────────────────────────────
+//
+// A tie-break round, end to end: the quizmaster saves a short bank of questions,
+// starts one in front of the tied teams, and the FIRST team to answer correctly
+// wins the higher place. Everything that decides the outcome — who may answer,
+// one shot each, whose correct answer arrived first — is enforced inside the
+// database RPCs, so a slow network or a re-opened laptop can never change the
+// verdict. The pages below only render what the server already decided.
+
+/** The saved bank. `correct_key` is readable only by an admin, by RLS. */
+export async function getTiebreakQuestions(): Promise<TiebreakQuestion[]> {
+  const { data, error } = await supabase
+    .from('tiebreak_questions')
+    .select('*')
+    .order('sort_order');
+
+  if (error) throw error;
+  return (data || []) as TiebreakQuestion[];
+}
+
+export async function createTiebreakQuestion(
+  question: Omit<TiebreakQuestion, 'id' | 'created_at'>
+): Promise<TiebreakQuestion> {
+  const { data, error } = await supabase
+    .from('tiebreak_questions')
+    .insert(question)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as TiebreakQuestion;
+}
+
+export async function updateTiebreakQuestion(
+  id: string,
+  updates: Partial<TiebreakQuestion>
+): Promise<TiebreakQuestion> {
+  const { data, error } = await supabase
+    .from('tiebreak_questions')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as TiebreakQuestion;
+}
+
+export async function deleteTiebreakQuestion(id: string): Promise<void> {
+  const { error } = await supabase.from('tiebreak_questions').delete().eq('id', id);
+  if (error) throw error;
+}
+
+/**
+ * Put a saved question in front of the chosen teams. Admin-only (enforced in the
+ * RPC). Any earlier live round is closed in the same statement, so exactly one
+ * tie-break is ever running and no panel has to guess which one is current.
+ */
+export async function startTiebreak(questionId: string, teamIds: string[]) {
+  const { data, error } = await supabase.rpc('start_tiebreak', {
+    p_question_id: questionId,
+    p_team_ids: teamIds,
+  });
+  if (error) throw new Error(error.message);
+
+  const res = data as { ok: boolean; error?: string; session_id?: string; teams?: number };
+  if (!res?.ok) {
+    if (res?.error === 'not_allowed') throw new Error('Only admins can start a tie-breaker');
+    if (res?.error === 'question_not_found') throw new Error('That tie-breaker question no longer exists');
+    if (res?.error === 'no_teams') throw new Error('Pick at least one team to compete in the tie-breaker');
+    throw new Error('Failed to start the tie-breaker');
+  }
+  return res;
+}
+
+export interface TiebreakSubmitResult {
+  correct: boolean;
+  won: boolean;
+  /** the RPC replayed this team's own winning answer (a retry, not a new pick) */
+  alreadySettled: boolean;
+}
+
+/**
+ * A selected team's one shot at the live tie-breaker. The RPC decides everything
+ * — eligibility, one attempt per team, and whether this pick was the first
+ * correct one — under a row lock, so two simultaneous buzzer presses can never
+ * both win.
+ */
+export async function submitTiebreakAnswer(
+  sessionId: string,
+  selectedKey: McqKey
+): Promise<TiebreakSubmitResult> {
+  const { data, error } = await supabase.rpc('submit_tiebreak_answer', {
+    p_session_id: sessionId,
+    p_selected_key: selectedKey,
+  });
+  if (error) throw new Error(error.message);
+
+  const res = data as {
+    ok: boolean; error?: string; correct?: boolean; won?: boolean; already_settled?: boolean;
+  };
+  if (!res?.ok) {
+    const messages: Record<string, string> = {
+      not_a_team_member: 'Your account is not linked to a team',
+      session_not_found: 'This tie-breaker is no longer available',
+      not_eligible: 'Your team is not in this tie-breaker',
+      already_answered: 'Your team has already answered',
+      tiebreak_closed: 'Another team answered first — the tie-breaker is over',
+      invalid_key: 'Pick one of the options',
+    };
+    throw new Error((res.error && messages[res.error]) || 'Failed to submit your answer');
+  }
+
+  return {
+    correct: res.correct ?? false,
+    won: res.won ?? false,
+    alreadySettled: res.already_settled ?? false,
+  };
+}
+
+/** End the live round (no id = whichever round is running). Admin-only. */
+export async function closeTiebreak(sessionId?: string | null) {
+  const { data, error } = await supabase.rpc('close_tiebreak', {
+    p_session_id: sessionId ?? null,
+  });
+  if (error) throw new Error(error.message);
+
+  const res = data as { ok: boolean; error?: string; closed?: number };
+  if (!res?.ok) {
+    if (res?.error === 'not_allowed') throw new Error('Only admins can stop a tie-breaker');
+    throw new Error('Failed to stop the tie-breaker');
+  }
+  return res;
+}
+
+/**
+ * The current (or most recently run) tie-break, as much of it as the caller may
+ * see. An admin gets the picks, their correctness and the answer key throughout;
+ * a team or the logged-out projector gets only who has answered until the round
+ * closes, when the reveal happens. Callable by anon.
+ */
+export async function getTiebreakState(): Promise<TiebreakState> {
+  const empty: TiebreakState = { session: null, question: null, answers: [] };
+
+  const { data, error } = await supabase.rpc('get_tiebreak_state');
+  if (error) return empty;
+
+  const res = data as ({ ok: boolean } & Partial<TiebreakState>) | null;
+  if (!res?.ok) return empty;
+
+  return {
+    session: res.session ?? null,
+    question: res.question ?? null,
+    answers: res.answers ?? [],
+  };
 }
 
 // ─── Auction Items ───────────────────────────────────────────────────────────
@@ -722,6 +882,10 @@ export async function resetDemoMode() {
       tiebreak_order: null,
     })
     .neq('id', '00000000-0000-0000-0000-000000000000');
+
+  // A demo reset clears the tie-breaker rounds as well — the bank itself is
+  // prepared material and is deliberately kept.
+  await supabase.from('tiebreak_sessions').delete().neq('id', '00000000-0000-0000-0000-000000000000');
 
   // Delete all auctions, bids, attempts, transactions
   await supabase.from('question_attempts').delete().neq('id', '00000000-0000-0000-0000-000000000000');

@@ -66,6 +66,8 @@ flowchart LR
     I --> G
     H --> G
     G --> A
+    G -->|still dead level| T[⚔️ Tie-breaker question<br/>first correct answer<br/>takes the higher place]
+    T --> A
 ```
 
 ### 💰 The economy
@@ -80,15 +82,16 @@ flowchart LR
 | **One charge per round** | If a team trips both penalties, only one applies — no bid wins the tie — so a round can never double-charge |
 | **Difficulty presets** | `basic` 50 TC / `intermediate` 100 TC / `expert` 200 TC starting bids, with matching reward & penalty tiers |
 | **Qualification** | Top **6** advance by default (score → budget → correct answers tie-break) — the cutoff is a single constant |
-| **Tie-breaker** | Still level on points, TC *and* correct answers? The quizmaster's ruling decides (Admin → Leaderboard). It can only ever reorder teams that are already tied |
+| **Tie-breaker round** | Still level on points, TC *and* correct answers? The quizmaster saves up to **3** questions in advance, puts one in front of the tied teams, and **the first correct answer takes the higher place** — one attempt each, decided on the server. Then the host fine-tunes the order by hand (Admin → Leaderboard) |
+| **Tie-break safety** | The ruling can only ever reorder teams that are already dead level. It can never lift anyone past a team it genuinely outscored |
 
 ## 🖥 Three screens, one truth
 
 | | **🛡 Admin Control Room** | **👥 Team Dashboard** | **📺 Projector Display** |
 |---|---|---|---|
 | Route | `/admin` (auth) | `/team` (auth) | `/display` (public) |
-| Powers | Start/close auctions, pause/restart the answer clock, grade answers (override only — MCQs auto-verify), bonuses, TC adjustments, item editor with MCQ builder, audit logs, CSV export, demo reset | Quick-bid chips + custom bids, live bid feed, MCQ picker with **instant verdict**, budget & rank stats, TC-adjustment notices | Giant bid counter, bid feed, gold/silver/bronze leaderboard, countdowns and TIME'S UP announcements for the whole hall |
-| Sees | Everything, including the answer key | Item, bids, own attempt | Item, bids, MCQ options — no answers |
+| Powers | Start/close auctions, pause/restart the answer clock, grade answers (override only — MCQs auto-verify), bonuses, TC adjustments, item editor with MCQ builder, **tie-breaker question bank + live tie-break round**, audit logs, CSV export, demo reset | Quick-bid chips + custom bids, live bid feed, MCQ picker with **instant verdict**, budget & rank stats, TC-adjustment notices, one-shot **tie-breaker answer** | Giant bid counter, bid feed, gold/silver/bronze leaderboard, countdowns and TIME'S UP announcements for the whole hall, **the live tie-breaker on the big screen** |
+| Sees | Everything, including the answer key | Item, bids, own attempt, the tie-breaker it was picked for — **no answers** | Item, bids, MCQ options, tie-breaker options — **no answers until the round closes** |
 
 Every screen ticks from the **same clock** and settles from the **same transaction**.
 That's not a slogan — it's the whole architecture. When a question is graded, all
@@ -96,7 +99,7 @@ three screens are told at the same moment: the admin panel and every team dashbo
 flash an instant verdict toast, and the projector throws the result full-screen
 across the hall (`CORRECT! · TEAM NAME · +500 TC`).
 
-## 🧠 Under the hood — eight hard problems, eight permanent fixes
+## 🧠 Under the hood — nine hard problems, nine permanent fixes
 
 <details>
 <summary><b>⚖️ Problem 1: "Admin says team A won, the question went to B"</b></summary>
@@ -244,6 +247,27 @@ click. Every screen follows instantly, because they all share `getRankings()`.
 </details>
 
 <details>
+<summary><b>⚔️ Problem 9: a tie-break you can actually run</b></summary>
+
+Problem 8 records a tie-breaker ruling — but at the event the ruling has to come from
+somewhere: the tied teams need a question, they need to see it at the same instant, and
+somebody has to decide who was first. Doing that by eye invites the one dispute the
+whole feature exists to prevent. **Fix:** a saved bank of up to three questions
+(`tiebreak_questions`), a `start_tiebreak()` RPC that puts one in front of the chosen
+teams, and `submit_tiebreak_answer()` — which takes the session row lock, so
+simultaneous buzzer presses are **serialised**. The first correct answer closes the
+round; every later submission reads a closed session. Two teams can never both "win",
+however close the race. One attempt per team is a `UNIQUE` constraint, not a UI rule,
+so four options cannot be brute-forced.
+
+The other half of the problem is what the room is allowed to *see*. While a round is
+live the public payload — which the logged-out projector reads — reports **who** has
+answered but never **what** they picked or whether it was right. Otherwise a wrong pick
+would hand every rival a free elimination, and the answer would leak one guess at a
+time. Picks and the answer key are revealed together the moment the round closes.
+</details>
+
+<details>
 <summary><b>🔐 Security posture</b></summary>
 
 - **Row Level Security on every table** — writes are strictly own-row / admin-only; reads are scoped per surface: teams and the public projector read the leaderboard columns (scores, budgets — public by design, they're on the big screen), everything private stays behind auth
@@ -285,6 +309,7 @@ npm install
    database/migrations/014_auto_question_timer_and_penalties.sql         # self-running clocks, TIME'S UP, no-bid & dry-streak penalties
    database/migrations/015_dry_round_penalty_150.sql                     # dry-streak penalty raised to −150 TC (ledger reason made branch-based)
    database/migrations/016_tiebreak_order.sql                            # manual tie-breaker ordering for dead-level teams
+   database/migrations/017_tiebreak_questions.sql                        # tie-breaker question bank + first-correct-wins live round
    ```
 
    All migrations are idempotent — safe to re-run.
@@ -323,12 +348,13 @@ src/
 │   ├── team/         # TeamDashboard — bidding + MCQ answering
 │   └── display/      # DisplayPage — the hall's projector view
 ├── components/
+│   ├── admin/        # TieBreakerPanel — question bank + the live tie-break round
 │   ├── layout/       # AdminLayout, TeamLayout
 │   ├── ui/           # Logo, modals, badges, animated numbers, result announcements
 │   └── ...
 ├── hooks/
 │   ├── useAuth.tsx   # Auth context
-│   ├── useRealtime.ts# Supabase Realtime subscriptions (auctions, bids, teams, settings, results)
+│   ├── useRealtime.ts# Supabase Realtime subscriptions (auctions, bids, teams, settings, results, tie-break)
 │   ├── useAutoCloseBidding.ts  # Shared phase deadlines → idempotent settlement
 │   │                           #   (bidding close + TIME'S UP clock)
 │   └── useRoundResults.ts      # Round verdicts → toast / projector announcement
@@ -341,7 +367,7 @@ src/
 └── index.css         # Tailwind 4 theme, neon glow, animations
 
 database/
-├── migrations/       # 001 → 016, ordered, idempotent
+├── migrations/       # 001 → 017, ordered, idempotent
 └── seed.sql          # Event settings + sample items
 ```
 

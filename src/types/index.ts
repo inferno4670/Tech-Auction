@@ -205,6 +205,69 @@ export interface EventLog {
   created_at: string;
 }
 
+// ─── Tie-Breaker Question Bank ───────────────────────────────────────────────
+//
+// A tie-break is settled by a question, not by the alphabet. The quizmaster
+// prepares a short bank before the event (TIEBREAK_BANK_LIMIT questions), picks
+// one for a tied group, and the FIRST team to answer it correctly takes the
+// higher place. `correct_key` lives on the question and is only ever readable by
+// an admin — teams receive the question through the get_tiebreak_state() RPC,
+// which strips the key while a round is live.
+
+export interface TiebreakQuestion {
+  id: string;
+  question: string;
+  option_a: string;
+  option_b: string;
+  option_c: string | null;
+  option_d: string | null;
+  correct_key: McqKey;
+  sort_order: number;
+  created_at: string;
+}
+
+export type TiebreakStatus = 'open' | 'closed';
+
+export interface TiebreakSession {
+  id: string;
+  status: TiebreakStatus;
+  question_id: string;
+  eligible_team_ids: string[];
+  winner_team_id: string | null;
+  winner_team_name: string | null;
+  started_at: string;
+  closed_at: string | null;
+}
+
+/**
+ * `selected_key` / `is_correct` are null for non-admins while the round is live:
+ * publishing another team's pick would hand the others a free elimination.
+ */
+export interface TiebreakAnswer {
+  team_id: string;
+  team_name: string;
+  answered_at: string;
+  selected_key: McqKey | null;
+  is_correct: boolean | null;
+}
+
+/** The question as a team/projector may see it — no key until the round closes. */
+export interface TiebreakQuestionView {
+  id: string;
+  question: string;
+  option_a: string;
+  option_b: string;
+  option_c: string | null;
+  option_d: string | null;
+  correct_key: McqKey | null;
+}
+
+export interface TiebreakState {
+  session: TiebreakSession | null;
+  question: TiebreakQuestionView | null;
+  answers: TiebreakAnswer[];
+}
+
 // ─── Extended / Computed Types ───────────────────────────────────────────────
 
 export interface TeamWithRank extends Team {
@@ -289,5 +352,7 @@ export const DIFFICULTY_PRESETS: Record<Difficulty, Omit<AuctionItem, 'id' | 'na
 
 export const DEFAULT_STARTING_BUDGET = 1000;
 export const DEFAULT_QUESTION_TIME = 25;
+/** How many tie-breaker questions the quizmaster prepares up front. */
+export const TIEBREAK_BANK_LIMIT = 3;
 /** Teams that survive the cut advance — see getRankings(). */
 export const TOP_QUALIFY_COUNT = 6;
