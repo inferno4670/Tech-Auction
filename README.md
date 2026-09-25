@@ -80,6 +80,7 @@ flowchart LR
 | **One charge per round** | If a team trips both penalties, only one applies — no bid wins the tie — so a round can never double-charge |
 | **Difficulty presets** | `basic` 50 TC / `intermediate` 100 TC / `expert` 200 TC starting bids, with matching reward & penalty tiers |
 | **Qualification** | Top **6** advance by default (score → budget → correct answers tie-break) — the cutoff is a single constant |
+| **Tie-breaker** | Still level on points, TC *and* correct answers? The quizmaster's ruling decides (Admin → Leaderboard). It can only ever reorder teams that are already tied |
 
 ## 🖥 Three screens, one truth
 
@@ -95,7 +96,7 @@ three screens are told at the same moment: the admin panel and every team dashbo
 flash an instant verdict toast, and the projector throws the result full-screen
 across the hall (`CORRECT! · TEAM NAME · +500 TC`).
 
-## 🧠 Under the hood — five hard problems, five permanent fixes
+## 🧠 Under the hood — eight hard problems, eight permanent fixes
 
 <details>
 <summary><b>⚖️ Problem 1: "Admin says team A won, the question went to B"</b></summary>
@@ -226,6 +227,23 @@ grade override for judgment calls — but the show never stalls waiting for a cl
 </details>
 
 <details>
+<summary><b>⚖️ Problem 8: the alphabet decided who qualified</b></summary>
+
+Ranking on points → Tech Coins → correct answers is unambiguous until two teams are
+level on all three, and then the last resort was the team NAME (A→Z). Fine in a demo;
+at a live event a tie is settled by a **tie-breaker round**, and if the tie sits on the
+qualification cut-off the wrong team can go through. **Fix:** an admin-only
+`set_tiebreak_order()` RPC stores the quizmaster's ruling on the team, and
+`getRankings()` consults it **strictly after** the three official keys. Because it can
+only ever reorder teams that are already dead level, it can never lift anyone past a
+team it genuinely outscored — which is exactly what makes it safe to hand a host
+mid-show. The whole tied group is written in one statement as `0,1,2…`, so two teams
+can never share a position; the Leaderboard page flags a tie that *decides the cut*,
+marks every manual ruling, and hands any group back to the automatic order in one
+click. Every screen follows instantly, because they all share `getRankings()`.
+</details>
+
+<details>
 <summary><b>🔐 Security posture</b></summary>
 
 - **Row Level Security on every table** — writes are strictly own-row / admin-only; reads are scoped per surface: teams and the public projector read the leaderboard columns (scores, budgets — public by design, they're on the big screen), everything private stays behind auth
@@ -266,6 +284,7 @@ npm install
    database/migrations/013_audit_delete_policy.sql                      # audit clear / per-entry delete
    database/migrations/014_auto_question_timer_and_penalties.sql         # self-running clocks, TIME'S UP, no-bid & dry-streak penalties
    database/migrations/015_dry_round_penalty_150.sql                     # dry-streak penalty raised to −150 TC (ledger reason made branch-based)
+   database/migrations/016_tiebreak_order.sql                            # manual tie-breaker ordering for dead-level teams
    ```
 
    All migrations are idempotent — safe to re-run.
@@ -322,7 +341,7 @@ src/
 └── index.css         # Tailwind 4 theme, neon glow, animations
 
 database/
-├── migrations/       # 001 → 015, ordered, idempotent
+├── migrations/       # 001 → 016, ordered, idempotent
 └── seed.sql          # Event settings + sample items
 ```
 

@@ -93,7 +93,7 @@ export async function updateTeam(id: string, updates: Partial<Team>) {
   return data as Team;
 }
 
-export async function createTeam(team: Omit<Team, 'id' | 'created_at' | 'score' | 'correct_answers' | 'wrong_answers' | 'auctions_won' | 'rounds_inactive' | 'current_budget'>) {
+export async function createTeam(team: Omit<Team, 'id' | 'created_at' | 'score' | 'correct_answers' | 'wrong_answers' | 'auctions_won' | 'rounds_inactive' | 'tiebreak_order' | 'current_budget'>) {
   const { data, error } = await supabase
     .from('teams')
     .insert({
@@ -118,6 +118,16 @@ export async function deleteTeam(id: string) {
 
 // ─── Rankings ────────────────────────────────────────────────────────────────
 
+/**
+ * The whole leaderboard, ranked.
+ *
+ * Order: POINTS → TECH COINS → CORRECT ANSWERS → manual tie-breaker → name.
+ * `score` is the real metric (a correct answer is +1, plus any admin bonus);
+ * Tech Coins only ever break a dead heat. The manual tie-breaker sits strictly
+ * BELOW the three official keys, so a quizmaster can rule on a tie after a
+ * tie-breaker round without being able to lift a team past one it genuinely
+ * outscored. With no override set, the alphabet is the last resort.
+ */
 export async function getRankings(): Promise<TeamWithRank[]> {
   const teams = await getTeams();
   const sorted = [...teams]
@@ -125,6 +135,11 @@ export async function getRankings(): Promise<TeamWithRank[]> {
       if (b.score !== a.score) return b.score - a.score;
       if (b.current_budget !== a.current_budget) return b.current_budget - a.current_budget;
       if (b.correct_answers !== a.correct_answers) return b.correct_answers - a.correct_answers;
+      // Unset overrides sort last (Number.MAX_SAFE_INTEGER), so an explicit
+      // tie-breaker position outranks an untouched team in the same tie.
+      const aOrder = a.tiebreak_order ?? Number.MAX_SAFE_INTEGER;
+      const bOrder = b.tiebreak_order ?? Number.MAX_SAFE_INTEGER;
+      if (aOrder !== bOrder) return aOrder - bOrder;
       return a.name.localeCompare(b.name);
     });
 
@@ -133,6 +148,34 @@ export async function getRankings(): Promise<TeamWithRank[]> {
     rank: index + 1,
     qualified: index < TOP_QUALIFY_COUNT,
   }));
+}
+
+/**
+ * Admin tie-breaker ruling — the quizmaster's decision when teams are level on
+ * every official metric and a tie-breaker round has to settle it.
+ *
+ * Pass the tied group's ids IN THE ORDER THEY SHOULD RANK (first id → first
+ * place); the RPC stores 0,1,2… in one statement so a partial write can never
+ * leave two teams sharing a position. Pass clear = true to drop the overrides
+ * instead — with ids to reset one group, or without ids to reset every team.
+ *
+ * Admin-only, enforced inside the RPC against the JWT. It only ever reorders
+ * teams that are already tied, so it cannot distort the standings.
+ */
+export async function setTiebreakOrder(teamIds: string[] | null, clear = false) {
+  const { data, error } = await supabase.rpc('set_tiebreak_order', {
+    p_team_ids: teamIds,
+    p_clear: clear,
+  });
+  if (error) throw new Error(error.message);
+
+  const res = data as { ok: boolean; error?: string; ordered?: number; cleared?: number };
+  if (!res?.ok) {
+    if (res?.error === 'not_allowed') throw new Error('Only admins can set the tie-breaker order');
+    if (res?.error === 'no_teams') throw new Error('No teams were sent to reorder');
+    throw new Error('Failed to save the tie-breaker order');
+  }
+  return res;
 }
 
 // ─── Auction Items ───────────────────────────────────────────────────────────
@@ -674,6 +717,9 @@ export async function resetDemoMode() {
       wrong_answers: 0,
       auctions_won: 0,
       rounds_inactive: 0,
+      // A demo reset clears the quizmaster's tie-breaker rulings too, so the
+      // standings fall back to the automatic order.
+      tiebreak_order: null,
     })
     .neq('id', '00000000-0000-0000-0000-000000000000');
 

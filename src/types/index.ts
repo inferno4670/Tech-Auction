@@ -40,6 +40,13 @@ export interface Team {
   wrong_answers: number;
   auctions_won: number;
   rounds_inactive: number;
+  /**
+   * Admin tie-breaker position WITHIN a group of teams level on score, budget
+   * and correct answers (NULL = fall back to the alphabet). It is consulted only
+   * after those three keys, so it can never move a team past one it genuinely
+   * outscored — see getRankings().
+   */
+  tiebreak_order: number | null;
   is_active: boolean;
   created_at: string;
 }
