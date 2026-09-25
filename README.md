@@ -61,7 +61,7 @@ flowchart LR
     D --> E[✅ Correct<br/>refund + 150 TC — instant]
     D --> F[❌ Wrong<br/>bid lost — instant]
     D -->|clock runs out| I[⏰ TIME'S UP<br/>wrong + correct answer<br/>on every screen]
-    E --> G[🔄 Penalties applied<br/>no bid −150 · 3 dry −100]
+    E --> G[🔄 Penalties applied<br/>no bid −150 · 3 dry −150]
     F --> G
     I --> G
     H --> G
@@ -76,8 +76,8 @@ flowchart LR
 | **Wrong answer** | You lose exactly what you bid — no extra penalty |
 | **Clock runs out** | The round settles itself: wrong, bid lost, **TIME'S UP** + the correct answer on every screen |
 | **Sat out the bidding** | Never placed a bid in a round that ran → automatic **−150 TC** |
-| **Inactivity** | 3 straight rounds without a win → automatic **−100 TC** |
-| **One charge per round** | If a team trips both penalties, only the larger applies — one round can never double-charge |
+| **Inactivity** | 3 straight rounds without a win → automatic **−150 TC** |
+| **One charge per round** | If a team trips both penalties, only one applies — no bid wins the tie — so a round can never double-charge |
 | **Difficulty presets** | `basic` 50 TC / `intermediate` 100 TC / `expert` 200 TC starting bids, with matching reward & penalty tiers |
 | **Qualification** | Top **6** advance by default (score → budget → correct answers tie-break) — the cutoff is a single constant |
 
@@ -265,6 +265,7 @@ npm install
    database/migrations/012_atomic_bids_and_round_announcements.sql       # atomic bids, buzzer grace, result announcements
    database/migrations/013_audit_delete_policy.sql                      # audit clear / per-entry delete
    database/migrations/014_auto_question_timer_and_penalties.sql         # self-running clocks, TIME'S UP, no-bid & dry-streak penalties
+   database/migrations/015_dry_round_penalty_150.sql                     # dry-streak penalty raised to −150 TC (ledger reason made branch-based)
    ```
 
    All migrations are idempotent — safe to re-run.
@@ -321,7 +322,7 @@ src/
 └── index.css         # Tailwind 4 theme, neon glow, animations
 
 database/
-├── migrations/       # 001 → 014, ordered, idempotent
+├── migrations/       # 001 → 015, ordered, idempotent
 └── seed.sql          # Event settings + sample items
 ```
 
